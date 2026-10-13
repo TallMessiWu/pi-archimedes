@@ -70,9 +70,26 @@ export function saveNotifyConfig(config: NotifyConfig): void {
  * So a reply used to be able to cancel an alert nobody asked for. A mouse event
  * no longer counts either — notify's contract is keystrokes (see README), and
  * `parseKey()` is what says whether one happened.
+ *
+ * The decoder is the test, but not the whole test: it names ASCII bytes and
+ * escape sequences, and nothing else. A character outside ASCII is delivered as
+ * itself — `é` is the two bytes C3 A9 on every terminal that did not take the
+ * Kitty keyboard protocol (Terminal.app, VTE/GNOME Terminal, xterm, tmux) — and
+ * `parseKey()` returns `undefined` for it. Treating that as "not a keystroke"
+ * would fire an alert at someone standing at the keyboard typing an accented
+ * letter, which is the failure this handler exists to prevent, so a printable
+ * character with no control byte in it counts as typing too. The test stays
+ * narrow on purpose: the `é`-shaped answer cannot mistake protocol traffic for
+ * a key press, because every reply pi-tui forwards opens with `ESC`, and the
+ * only other printable bytes a listener can see are the *tail* of a reply split
+ * across two reads (`62;1;9c`) — printable ASCII, still no key press.
  */
+const TYPED_NON_ASCII = /[\u00a0-\uffff]/;
+const CONTROL_BYTE = /[\u0000-\u001f\u007f-\u009f]/;
+
 function isKeystroke(data: string): boolean {
-  return parseKey(data) !== undefined;
+  if (parseKey(data) !== undefined) return true;
+  return TYPED_NON_ASCII.test(data) && !CONTROL_BYTE.test(data);
 }
 
 /** Wrap an OSC sequence for tmux passthrough. */

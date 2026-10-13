@@ -172,6 +172,50 @@ describe("notify cancel-on-input under pi 1.x terminal traffic", () => {
     expect(harness.written()).toEqual([]);
   });
 
+  // What `parseKey()` names is not the whole set of keystrokes. pi-tui's
+  // `StdinBuffer` splits batched input into single sequences before listeners
+  // run, so a typed character reaches us on its own — but the decoder only
+  // resolves ASCII bytes and escape sequences. A character outside ASCII
+  // arrives as itself (`é` is the two bytes C3 A9 on any terminal that did not
+  // take the Kitty keyboard protocol, which is Terminal.app, VTE, xterm and
+  // tmux), `parseKey()` has no name for it, and the keystroke would be missed:
+  // the alert fires at someone sitting at the keyboard, typing an accented
+  // letter. Under Kitty the same key arrives as CSI-u and does decode, so this
+  // is exactly the legacy-terminal path.
+  it("cancels on a typed character pi-tui's decoder does not name", () => {
+    const harness = setup();
+
+    harness.emit("agent_settled");
+    harness.terminalInput("é"); // one key press, no Kitty protocol
+    harness.waitPastDelay();
+
+    expect(harness.written()).toEqual([]);
+  });
+
+  it("cancels on a typed CJK character", () => {
+    const harness = setup();
+
+    harness.emit("agent_settled");
+    harness.terminalInput("中");
+    harness.waitPastDelay();
+
+    expect(harness.written()).toEqual([]);
+  });
+
+  it("does not cancel on the ASCII tail of a reply split across reads", () => {
+    const harness = setup();
+
+    // A reply whose ESC header pi-tui consumed can leave a bare tail (digits
+    // and semicolons) to be flushed as input. It is printable ASCII with no
+    // escape byte, so "is it text?" is the wrong question to ask — only a
+    // character that could only have come from a key press cancels.
+    harness.emit("agent_settled");
+    harness.terminalInput("62;1;9c");
+    harness.waitPastDelay();
+
+    expect(harness.written()).toContain(TASK_COMPLETE_OSC);
+  });
+
   it("cancels on a Kitty-protocol key press and on its release", () => {
     const harness = setup();
 
