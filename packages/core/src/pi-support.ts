@@ -132,6 +132,27 @@ export function piSupportWarnings(): PiSupportWarning[] {
 }
 
 /**
+ * Is this registry entry something this module can actually report?
+ *
+ * The registry is shared memory: `packages/diff` writes it without importing
+ * here, and a standalone `diff` and an installed suite are installed and
+ * versioned separately, so an entry may predate or postdate this shape. A
+ * sentence built from missing fields reads "pi undefined is older than
+ * undefined (>=undefined) need.", which is worse than saying nothing — so an
+ * unrecognisable entry is left out of the notice and named in the log instead.
+ */
+function isReportable(entry: unknown): entry is PiSupportWarning {
+  const w = entry as Partial<PiSupportWarning> | null | undefined;
+  return (
+    typeof w === "object" &&
+    w !== null &&
+    typeof w.pkg === "string" &&
+    typeof w.min === "string" &&
+    typeof w.actual === "string"
+  );
+}
+
+/**
  * The one aggregated message, or `undefined` when there is nothing to say or it
  * has already been handed out.
  *
@@ -144,7 +165,18 @@ export function piSupportWarnings(): PiSupportWarning[] {
  */
 export function takePiSupportNotice(): string | undefined {
   try {
-    const warnings = piSupportWarnings();
+    const entries = Object.entries(registry());
+    const warnings = entries.filter(([, entry]) => isReportable(entry)).map(([, entry]) => entry);
+    const unreadable = entries.length - warnings.length;
+    if (unreadable > 0) {
+      // Loud in the log, silent on screen: a dropped warning must never be a
+      // silent one, and a shape this module cannot read is a drift bug someone
+      // needs to be able to find.
+      diag(
+        "core",
+        `pi-support registry held ${unreadable} entr${unreadable === 1 ? "y" : "ies"} outside the agreed shape; left out of the host-version notice`,
+      );
+    }
     if (warnings.length === 0) return undefined;
     if (getGlobal<boolean>(NOTICED_KEY)) return undefined;
     setGlobal(NOTICED_KEY, true);

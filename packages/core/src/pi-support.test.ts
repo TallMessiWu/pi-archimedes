@@ -403,3 +403,42 @@ describe("the comparator exists once per dependency island", () => {
     ).toEqual([]);
   });
 });
+
+// ── Reading an entry the OTHER island wrote ─────────────────────────────────
+//
+// `packages/diff` writes into this registry without importing this module, so
+// the notice is built from data this file's own writer did not produce — and a
+// standalone `diff` install and an installed suite are independently versioned,
+// so the writer may even be a different build. Two things follow: core must
+// render exactly what diff writes (the pin below), and it must never turn an
+// entry it cannot read into user-visible text.
+
+describe("takePiSupportNotice reads the registry as foreign data", () => {
+  it("renders an entry written in the shape `diff` writes it", () => {
+    // The literal `packages/diff/src/pi-support.ts` produces, byte for byte —
+    // not one this module built. If the two ends ever disagree, this fails.
+    globals[WARNINGS_KEY] = {
+      diff: { pkg: "diff", min: "1.2.0", actual: "0.99.2" },
+    };
+
+    const notice = takePiSupportNotice() ?? "";
+    expect(notice).toContain("diff");
+    expect(notice).toContain("1.2.0");
+    expect(notice).toContain("0.99.2");
+    expect(notice).not.toContain("undefined");
+  });
+
+  it("skips an entry it cannot read, and says so in the log instead of printing it", () => {
+    // An older or newer sibling under the same symbol key is the whole risk of
+    // a shared registry. Building the sentence from missing fields used to
+    // produce "pi undefined is older than undefined (>=undefined) need." — a
+    // user-visible notice made of nothing.
+    globals[WARNINGS_KEY] = { sibling: { version: "1.0", floor: "2.0" } };
+
+    expect(takePiSupportNotice()).toBeUndefined();
+    // Nothing was spent: a registry with nothing reportable in it must not
+    // silence a warning that arrives later.
+    globals[WARNINGS_KEY] = { ui: { pkg: "ui", min: "1.2.0", actual: "0.99.2" } };
+    expect(takePiSupportNotice()).toContain("ui");
+  });
+});
