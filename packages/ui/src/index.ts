@@ -192,7 +192,18 @@ export function registerUI(pi: ExtensionAPI): void {
           // the sizing that header keeps until the next replacement.
           const caps = screenCapabilities(screenMode(tui));
           const comp: Component & { dispose(): void } = {
-            invalidate(): void {},
+            // pi invalidates the component tree on every theme change
+            // (`onThemeChange()` → `ui.invalidate()`) and from the theme file
+            // watcher, and the splash's cached lines carry the theme's colours
+            // — so this is the hook that keeps a finished splash from rendering
+            // yesterday's palette for the rest of the session. The cache key is
+            // the size it was drawn at, which a theme switch leaves alone.
+            // Only the memo goes: this is a repaint, not an animation restart.
+            invalidate(): void {
+              delete ref.cachedLines;
+              delete ref.cachedWidth;
+              delete ref.cachedHeight;
+            },
             render(width: number): string[] {
               // Regular screen: sized to the terminal the splash scrolls
               // through. Frame-bounded screen: the viewport owns the height, so

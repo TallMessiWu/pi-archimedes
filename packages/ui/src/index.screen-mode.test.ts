@@ -361,4 +361,35 @@ describe("header output per screen mode", () => {
 
     expect(splash.comp.render(WIDTH)).toHaveLength(ROWS - 3);
   });
+
+  // A finished splash caches its lines to avoid re-running the text layout on
+  // every frame, and those lines carry the theme's colours. pi tells a
+  // component to drop cached rendering state by calling `invalidate()`, and it
+  // does that for the whole tree on every theme change (`onThemeChange()` →
+  // `ui.invalidate()`, interactive-mode.js:792) and from the theme file
+  // watcher. So the hook exists, the cache has to honour it, and the cache key
+  // (width, height) cannot save it: a theme switch changes neither.
+  it("drops its cached lines when pi invalidates it, so a theme change shows", () => {
+    vi.useFakeTimers();
+    let colour = "38;2;100;100;100";
+    const theme = {
+      fg: (_token: string, text: string) => `\x1b[${colour}m${text}\x1b[0m`,
+      getFgAnsi: () => "",
+    } as unknown as Theme;
+
+    const { headerFactory } = startSession();
+    const tui = { terminal: { rows: ROWS }, requestRender: vi.fn() } as unknown as TUI;
+    const comp = headerFactory(tui, theme);
+    vi.advanceTimersByTime(5_000);
+
+    const before = comp.render(WIDTH).join("\n");
+    expect(before).toContain(`\x1b[${colour}m`);
+
+    colour = "38;2;0;200;0";
+    comp.invalidate();
+    const after = comp.render(WIDTH).join("\n");
+
+    expect(after).toContain(`\x1b[${colour}m`);
+    expect(after).not.toContain("\x1b[38;2;100;100;100m");
+  });
 });

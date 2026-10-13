@@ -479,4 +479,34 @@ describe("packages/ui lifecycle and registration", () => {
       triggerShutdown(ctx);
     });
   });
+
+  // The header component's own contract with pi, independent of lifecycle: pi
+  // tells a component to drop cached rendering state by calling
+  // `invalidate()` — `onThemeChange()` does it for the whole tree
+  // (`interactive-mode.js:792`), as does the theme file watcher — and the
+  // splash caches its finished lines, which carry the theme's colours.
+  describe("header component contract", () => {
+    it("drops the cached header lines when pi invalidates it (theme change)", () => {
+      const { triggerStart } = setupHarness();
+      const { ctx, ui } = makeCtx(true);
+
+      triggerStart(ctx);
+      const headerFactory = ui.setHeader.mock.calls[0]![0];
+      const comp = headerFactory({ terminal: { rows: 24 } } as TUI, {} as Theme);
+
+      comp.render(80);
+      const ref = vi.mocked(renderHeader).mock.calls.at(-1)![1] as {
+        settled: boolean;
+        cachedLines?: string[];
+      };
+      // The state a finished splash leaves behind (the mocked `renderHeader`
+      // does not fill it in, so the test does what the real one would).
+      ref.settled = true;
+      ref.cachedLines = ["\x1b[90mv1.2.0\x1b[0m"];
+
+      comp.invalidate();
+
+      expect(ref.cachedLines).toBeUndefined();
+    });
+  });
 });
