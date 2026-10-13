@@ -174,11 +174,11 @@ const REVEAL_DEBOUNCE_MS = 150;
 const FRAME_INTERVAL_MS = 16;
 
 // One splash is on screen at a time. pi disposes the previous header before it
-// builds the next one (`setExtensionHeader()`), and `/reload` and screen-mode
-// switches both go through that path, so a module pair of timers cannot leak a
-// second animation — and holds no renderer: each timer closes over the `tui` it
-// was started with, and the one running is the one the current header factory
-// was handed (ADR 0027).
+// builds the next one (`setExtensionHeader()` — a new session, `/reload`, or any
+// `setHeader()` call), so a module pair of timers cannot leak a second
+// animation — and holds no renderer: each timer closes over the `tui` it was
+// started with, and the one running is the one the current header factory was
+// handed (ADR 0027).
 let frameTimer: ReturnType<typeof setInterval> | undefined;
 let revealTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -214,10 +214,11 @@ function startFrameTimer(tui: TUI, ref: ListingRef): void {
 
 /**
  * Install the splash for the header we were just handed: reset the animation
- * ref and start the frame timer. Re-installing (a screen-mode switch or
- * `/reload` re-invoking the header factory) restarts the animation on the
- * renderer now in hand and stops the previous one — a stale renderer must not
- * keep being asked for frames.
+ * ref and start the frame timer. Re-installing (a new session, `/reload`, or
+ * any other `setHeader()` replacement, each of which pi disposes the old header
+ * before it calls the factory) restarts the animation on the renderer now in
+ * hand and stops the previous one — a stale renderer must not keep being asked
+ * for frames.
  *
  * Sections are not passed here: call {@link revealStartupListing} with them
  * (or not at all, which leaves the splash as logo + version).

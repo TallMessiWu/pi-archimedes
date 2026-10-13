@@ -464,7 +464,7 @@ describe("packages/ui lifecycle and registration", () => {
       expect(ui.setEditorComponent).toHaveBeenLastCalledWith(undefined);
     });
 
-    it("stops the splash when pi disposes the header (screen switch, header replaced)", () => {
+    it("stops the splash when pi disposes the header (header replaced, session restart)", () => {
       const { triggerStart, triggerShutdown } = setupHarness();
       const { ctx, ui } = makeCtx(true);
 

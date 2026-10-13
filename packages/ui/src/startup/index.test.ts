@@ -195,7 +195,7 @@ describe("patchStartupListing animation timer", () => {
 		expect(requestRender.mock.calls.length).toBe(renderCountAfterFade);
 	});
 
-	it("restarts from scratch when the header is rebuilt (screen switch, /reload)", () => {
+	it("restarts from scratch when the header is rebuilt (new session, /reload)", () => {
 		vi.useFakeTimers();
 		const { tui } = makeTui();
 		const ref: ListingRef = { ...makeRef(), revealed: false };
@@ -205,7 +205,9 @@ describe("patchStartupListing animation timer", () => {
 		expect(frameMidAnimation).toBeGreaterThan(0);
 
 		// The header factory is re-invoked with a fresh renderer and ref — what
-		// switchTuiMode() and /reload both do.
+		// a new session, `/reload` or any other `setHeader()` replacement does.
+		// A `tuiMode` switch is not one of those: pi re-mounts the header it
+		// already has, which is why nothing here may hold on to a renderer.
 		const firstRenders = tui.requestRender.mock.calls.length;
 		expect(firstRenders).toBe(frameMidAnimation);
 

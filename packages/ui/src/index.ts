@@ -181,13 +181,15 @@ export function registerUI(pi: ExtensionAPI): void {
         };
         const ref = uiRef;
         const headerFactory = (tui: TUI, theme: Theme): Component & { dispose(): void } => {
-          // Screen mode is still asked of the renderer we were just handed,
-          // every call: it is mutable mid-session (`switchTuiMode()` rebuilds
-          // the TUI and re-invokes this factory), so caching the answer would
-          // keep the old screen's sizing. Only the header's *height* differs
-          // now — the animation itself drives a renderer rather than writing to
-          // scrollback, so it runs on either screen (ADR 0027's transcript-write
-          // gate went away with the listing it was guarding).
+          // Screen mode is asked of the renderer we were just handed, never
+          // cached in a module or a field (ADR 0027). Be exact about what that
+          // buys: pi calls this factory again whenever the header is replaced —
+          // a new session, `/reload` (which goes through `resetExtensionUI()`),
+          // or any `setHeader()`. It does *not* call it for a `tuiMode` switch:
+          // `switchTuiMode()` stops the old TUI, builds a new one and re-mounts
+          // the components it already has, and `customHeader` is only ever
+          // assigned in `setExtensionHeader()`. So the sizing decided here is
+          // the sizing that header keeps until the next replacement.
           const caps = screenCapabilities(screenMode(tui));
           const comp: Component & { dispose(): void } = {
             invalidate(): void {},
@@ -199,9 +201,12 @@ export function registerUI(pi: ExtensionAPI): void {
               const height = caps.frameBounded ? CONTENT_ONLY_HEIGHT : tui.terminal.rows - 3;
               return renderHeader(theme, ref, width, height);
             },
-            // pi disposes the previous header before it builds the next one, so
-            // this is where the splash's timers die on a screen switch or a
-            // `setHeader()` replacement — no stored renderer needed.
+            // pi disposes the header it is replacing before it builds the next
+            // one (`setExtensionHeader()` disposes, then calls the factory), so
+            // this is where the splash's timers die on a `setHeader()`
+            // replacement or a session restart — no stored renderer needed. A
+            // `tuiMode` switch does not dispose: it re-mounts this same
+            // component, whose timers then run until they settle themselves.
             dispose(): void {
               stopStartupListing();
             },
