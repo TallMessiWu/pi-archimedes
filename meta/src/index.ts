@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import { time as archTime, print as archPrintTimings, reset as archResetTimings } from "@pi-archimedes/core/profiler";
+import { diag } from "@pi-archimedes/core/log";
 import { registerCore } from "@pi-archimedes/core";
 import { registerUI, unpatchConsoleLog } from "@pi-archimedes/ui";
 import { registerFooter } from "@pi-archimedes/footer";
@@ -104,13 +105,15 @@ export default function (pi: ExtensionAPI): void {
     try {
       reloaded = await offerKeybindingFix(ctx);
     } catch (e) {
-      console.error("[archimedes] keybinding offer failed:", e);
+      diag("meta", `[archimedes] keybinding offer failed: ${e instanceof Error ? e.message : String(e)}`);
     }
     // If the offer triggered a reload, the fresh session runs this handler
     // again (where the offer is a no-op — keybindings.json now exists), so
     // do NOT run the onboarding on the now-stale ctx.
     if (reloaded) return;
-    void runOnboarding(ctx).catch((err) => console.error("[archimedes] onboarding failed:", err));
+    void runOnboarding(ctx).catch((err) =>
+      diag("meta", `[archimedes] onboarding failed: ${err instanceof Error ? err.message : String(err)}`),
+    );
   });
   archTime("first-run handler");
 
@@ -123,17 +126,17 @@ export default function (pi: ExtensionAPI): void {
     // ── Parallel lazy-load all four packages (saves ~100ms vs sequential) ──
     const [diffMod, ipMod, saMod, webMod] = await Promise.all([
       isPluginEnabled("diff")
-        ? import("@pi-archimedes/diff").catch((e) => { console.error("[archimedes] diff load failed:", e); return null; })
+        ? import("@pi-archimedes/diff").catch((e) => { diag("meta", `[archimedes] diff load failed: ${e instanceof Error ? e.message : String(e)}`); return null; })
         : Promise.resolve(null),
       isPluginEnabled("image-paste")
-        ? import("@pi-archimedes/image-paste").catch((e) => { console.error("[archimedes] image-paste load failed:", e); return null; })
+        ? import("@pi-archimedes/image-paste").catch((e) => { diag("meta", `[archimedes] image-paste load failed: ${e instanceof Error ? e.message : String(e)}`); return null; })
         : Promise.resolve(null),
       isPluginEnabled("subagent")
-        ? import("@pi-archimedes/subagent").catch((e) => { console.error("[archimedes] subagent load failed:", e); return null; })
+        ? import("@pi-archimedes/subagent").catch((e) => { diag("meta", `[archimedes] subagent load failed: ${e instanceof Error ? e.message : String(e)}`); return null; })
         : Promise.resolve(null),
       isPluginEnabled("web")
         ? import("@pi-archimedes/web").catch((e) => {
-            console.error("[archimedes] web load failed:", e);
+            diag("meta", `[archimedes] web load failed: ${e instanceof Error ? e.message : String(e)}`);
             return null;
           })
         : Promise.resolve(null),

@@ -13,6 +13,7 @@ import { DiffComponent } from "./diff-component.js";
 import type { DiffBg, DiffColors } from "./ansi/index.js";
 import { resetDiffColors } from "./ansi/index.js";
 import { registerWriteTool, registerEditTool } from "./tools/index.js";
+import { diag } from "./log.js";
 
 // ---------------------------------------------------------------------------
 // Re-exports
@@ -98,7 +99,10 @@ try {
 	};
 	_TextComponent = tui.Text;
 } catch (error) {
-	console.error(
+	// A missing SDK means the diff tool is not registered at all, which is a
+	// developer-facing structural failure — the log file, never the console.
+	diag(
+		"diff",
 		`[diff] failed to load Pi SDK: ${error instanceof Error ? error.message : String(error)}`,
 	);
 }
@@ -118,7 +122,7 @@ export function registerDiffTools(
 	setRenderConfig(() => getConfig());
 
 	if (!_sdk?.createWriteTool || !_sdk?.createEditTool || !_TextComponent) {
-		console.warn("[diff] SDK not available, skipping diff tool registration");
+		diag("diff", "[diff] SDK not available, skipping diff tool registration");
 		return;
 	}
 

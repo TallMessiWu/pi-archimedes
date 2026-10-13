@@ -75,7 +75,7 @@ export function registerUI(pi: ExtensionAPI): void {
   // previous version left on the shared prototype (upgrade + /reload case).
   migrateRemovedToolPatch();
 
-  // Patch console.log for model scope capture
+  // Patch pi's startup stdout for model scope capture
   patchConsoleLog();
 
   pi.on("message_end", (event, _ctx) => {
@@ -249,12 +249,19 @@ export function registerUI(pi: ExtensionAPI): void {
         );
       }
 
-      patchThinkingRenderer(() => ctx.ui.theme, {
-        labelText: config.labelText,
-        labelColor: config.labelColor,
-        autoCollapseThinking: config.autoCollapseThinking,
-        thinkingStyle: normalizeThinkingStyle(config.thinkingStyle),
-      });
+      patchThinkingRenderer(
+        () => ctx.ui.theme,
+        {
+          labelText: config.labelText,
+          labelColor: config.labelColor,
+          autoCollapseThinking: config.autoCollapseThinking,
+          thinkingStyle: normalizeThinkingStyle(config.thinkingStyle),
+        },
+        // The patch's one user-visible diagnostic (a skipped patch) goes to the
+        // notification surface — the console is not a surface on either screen
+        // mode, and a subagent child discards it.
+        (message) => ctx.ui.notify(message, "warning"),
+      );
     }
   });
 }

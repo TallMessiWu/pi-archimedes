@@ -4,6 +4,7 @@ import { loadUIConfig } from "../config.js";
 import { detectSection, parseSectionText, parseModelScope, formatColumns, buildItemWrapper, type ParsedSection } from "./sections.js";
 import { fetchLatestVersion, compareVersions } from "./version.js";
 import { stripAnsi } from "@pi-archimedes/core/text";
+import { diag } from "@pi-archimedes/core/log";
 import { Text, Spacer, Container, type TUI, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 
 // Symbol keys (survive hot-reload)
@@ -254,7 +255,9 @@ export function patchStartupListing(
 ): void {
   const resourcesContainer = findLoadedResourcesContainer(tui) ?? findChatContainer(tui);
   if (!resourcesContainer) {
-    console.warn("[archimedes] Could not find resources container — startup listing disabled. This may indicate a pi TUI structure change.");
+    // Runs inside the header factory, i.e. on a render path: a console write
+    // here lands in the frame being drawn. Structural drift is for the log.
+    diag("ui", "[archimedes] Could not find resources container — startup listing disabled. This may indicate a pi TUI structure change.");
     return;
   }
   const rc = resourcesContainer as any;
@@ -391,10 +394,10 @@ export function patchStartupListing(
     try {
       origAddChild(component);
     } catch (err) {
-      console.error("[archimedes] Error in resourcesContainer.addChild:", err);
+      diag("ui", `[archimedes] Error in resourcesContainer.addChild: ${err instanceof Error ? err.message : String(err)}`);
     }
   } catch (err) {
-    console.error("[archimedes] Error in startup listing addChild handler:", err);
+    diag("ui", `[archimedes] Error in startup listing addChild handler: ${err instanceof Error ? err.message : String(err)}`);
   }
   };
 }

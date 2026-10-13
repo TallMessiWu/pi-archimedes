@@ -1,5 +1,7 @@
 // ── Bus (pub/sub via globalThis Symbol) ──────────────────────────────────────
 
+import { diag } from "./log.js";
+
 const BUS_KEY = Symbol.for("archimedes:bus");
 const QUEUE_KEY = Symbol.for("archimedes:busQueue");
 
@@ -15,6 +17,12 @@ interface CostUpdatePayload {
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   cost?: number;
+}
+
+// A listener failure is a one-line diagnostic, not a stack dump: the sink keeps
+// one line per entry, and the message is what identifies the broken listener.
+function describe(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 // Type-safe globalThis access — avoids `as unknown as` casts
@@ -35,10 +43,10 @@ function createBus(): Bus {
         for (const fn of subs) {
           try {
             Promise.resolve(fn(payload)).catch((err) =>
-              console.error(`[archimedes:bus] Async error in listener for "${event}":`, err));
+              diag("core", `[archimedes:bus] Async error in listener for "${event}": ${describe(err)}`));
           } catch (err) {
             // Listener errors should not crash other listeners
-            console.error(`[archimedes:bus] Error in listener for "${event}":`, err);
+            diag("core", `[archimedes:bus] Error in listener for "${event}": ${describe(err)}`);
           }
         }
       } else {
@@ -62,9 +70,9 @@ function createBus(): Bus {
           if (queuedEvent === event) {
             try {
               Promise.resolve(listener(payload)).catch((err) =>
-                console.error(`[archimedes:bus] Async error in listener for "${event}":`, err));
+                diag("core", `[archimedes:bus] Async error in listener for "${event}": ${describe(err)}`));
             } catch (err) {
-              console.error(`[archimedes:bus] Error in listener for "${event}":`, err);
+              diag("core", `[archimedes:bus] Error in listener for "${event}": ${describe(err)}`);
             }
           }
         }
