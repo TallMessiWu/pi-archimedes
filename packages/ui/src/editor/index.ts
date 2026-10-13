@@ -369,8 +369,17 @@ export class HephaestusEditor extends CustomEditor {
         return p.panelBg + pad + patched + pad + RESET;
       };
 
-      const topEdge = p.panelEdge + "▁".repeat(width) + RESET;
-      const botEdge = p.panelEdge + "▔".repeat(width) + RESET;
+      // An edge colour paints the slab; no edge colour means the theme said
+      // "the terminal's own colour", and an un-prefixed row of `▁`/`▔` would
+      // then paint those glyphs in the terminal's own FOREGROUND — a hard, bright
+      // bar above and below the editor on a dark terminal (what pi's default
+      // `system` theme on a terminal that reported no background produces).
+      // No colour, no slab: the rows go blank rather than disappearing, because
+      // the frame's height is a layout contract.
+      const edgeRow = (glyph: string): string =>
+        p.panelEdge ? p.panelEdge + glyph.repeat(width) + RESET : " ".repeat(width);
+      const topEdge = edgeRow("▁");
+      const botEdge = edgeRow("▔");
 
       return [topEdge, ...raw.map(wrap), botEdge];
     } catch (e) {
