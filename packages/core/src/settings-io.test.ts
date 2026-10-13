@@ -17,7 +17,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 }));
 
 // Import after mocks are set up
-const { loadConfig, saveConfig, removeConfig, isConfigEnabled, setConfigEnabled, updateConfig } = await import("./settings-io.js");
+const { loadConfig, saveConfig, removeConfig, isConfigEnabled, setConfigEnabled, updateConfig, readEffectiveSettings } = await import("./settings-io.js");
 
 describe("removeConfig", () => {
   beforeEach(() => {
@@ -466,5 +466,120 @@ describe("symlink preservation", () => {
     const data = JSON.parse(fs.readFileSync(t, "utf-8"));
     expect(data["archimedes.other"]).toEqual({ keep: true });
     expect(data["archimedes.test"]).toEqual({ d: 4 });
+  });
+});
+
+// ── readEffectiveSettings ───────────────────────────────────────────────────
+//
+// `loadConfig` reads `~/.pi/agent/settings.json` by hand, which cannot see
+// project-scoped settings or overrides. `pi.getSettings()` returns the merged
+// effective object, so it is the right source when the running pi has it — and
+// the file read is the fallback that keeps core's peer floor where ADR 0013 put
+// it (getSettings is an ExtensionAPI method that older pi does not expose).
+// Note the direction of the whole thing: this is a READER. The writer stays on
+// the hand-rolled symlink-preserving path because pi has no public write API.
+
+describe("readEffectiveSettings", () => {
+  const settingsPath = () => join(tempDir, "settings.json");
+
+  beforeEach(() => {
+    const p = settingsPath();
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  });
+
+  afterEach(() => {
+    const p = settingsPath();
+    try { fs.unlinkSync(p); } catch { /* ignore */ }
+    try { fs.unlinkSync(p + ".tmp"); } catch { /* ignore */ }
+  });
+
+  it("returns pi.getSettings() when the host exposes it", () => {
+    const pi = { getSettings: () => ({ "archimedes.web": { braveApiKey: "from-host" } }) };
+    expect(readEffectiveSettings(pi)).toEqual({ "archimedes.web": { braveApiKey: "from-host" } });
+  });
+
+  it("its value wins over settings.json (project scope and overrides are invisible to the file read)", () => {
+    fs.writeFileSync(
+      settingsPath(),
+      JSON.stringify({ "archimedes.web": { braveApiKey: "from-file" } }),
+      "utf-8",
+    );
+    const pi = { getSettings: () => ({ "archimedes.web": { braveApiKey: "from-effective" } }) };
+    const result = readEffectiveSettings(pi) as { "archimedes.web": { braveApiKey: string } };
+    expect(result["archimedes.web"].braveApiKey).toBe("from-effective");
+  });
+
+  it("falls back to the file read when the handle has no getSettings (a pi older than the API)", () => {
+    fs.writeFileSync(
+      settingsPath(),
+      JSON.stringify({ "archimedes.web": { braveApiKey: "from-file" } }),
+      "utf-8",
+    );
+    const result = readEffectiveSettings({}) as { "archimedes.web": { braveApiKey: string } };
+    expect(result["archimedes.web"].braveApiKey).toBe("from-file");
+  });
+
+  it("falls back to the file read when no handle is passed at all", () => {
+    fs.writeFileSync(settingsPath(), JSON.stringify({ "test.ns": { a: 1 } }), "utf-8");
+    expect(readEffectiveSettings()).toEqual({ "test.ns": { a: 1 } });
+    expect(readEffectiveSettings(undefined)).toEqual({ "test.ns": { a: 1 } });
+    expect(readEffectiveSettings(null)).toEqual({ "test.ns": { a: 1 } });
+  });
+
+  it("treats a non-function getSettings property as absent", () => {
+    fs.writeFileSync(settingsPath(), JSON.stringify({ "test.ns": { a: 1 } }), "utf-8");
+    expect(readEffectiveSettings({ getSettings: "not a function" })).toEqual({ "test.ns": { a: 1 } });
+  });
+
+  it("falls back when getSettings() throws — pi asserts an active extension context and can refuse", () => {
+    fs.writeFileSync(settingsPath(), JSON.stringify({ "test.ns": { a: 1 } }), "utf-8");
+    const pi = {
+      getSettings: () => {
+        throw new Error("Extension is not active");
+      },
+    };
+    expect(() => readEffectiveSettings(pi)).not.toThrow();
+    expect(readEffectiveSettings(pi)).toEqual({ "test.ns": { a: 1 } });
+  });
+
+  it("falls back when getSettings() returns something unusable (null / undefined / a scalar)", () => {
+    fs.writeFileSync(settingsPath(), JSON.stringify({ "test.ns": { a: 1 } }), "utf-8");
+    expect(readEffectiveSettings({ getSettings: () => undefined })).toEqual({ "test.ns": { a: 1 } });
+    expect(readEffectiveSettings({ getSettings: () => null })).toEqual({ "test.ns": { a: 1 } });
+    expect(readEffectiveSettings({ getSettings: () => 42 })).toEqual({ "test.ns": { a: 1 } });
+  });
+
+  it("returns an empty object for malformed JSON with no handle (existing loadConfig behaviour preserved)", () => {
+    fs.writeFileSync(settingsPath(), "{ invalid json }", "utf-8");
+    expect(readEffectiveSettings()).toEqual({});
+    // …and the malformed file still does not break the namespaced reader.
+    expect(loadConfig("test.ns", { foo: "bar" })).toEqual({ foo: "bar" });
+  });
+
+  it("returns {} when there is no file and no handle", () => {
+    expect(fs.existsSync(settingsPath())).toBe(false);
+    expect(readEffectiveSettings()).toEqual({});
+  });
+
+  it("never writes: it is a reader, so the file and the writer's tmp path are untouched", () => {
+    fs.writeFileSync(settingsPath(), JSON.stringify({ "test.ns": { a: 1 } }), "utf-8");
+    const before = fs.readFileSync(settingsPath(), "utf-8");
+    const beforeMtimeMs = fs.statSync(settingsPath()).mtimeMs;
+    readEffectiveSettings({});
+    readEffectiveSettings({ getSettings: () => ({}) });
+    expect(fs.readFileSync(settingsPath(), "utf-8")).toBe(before);
+    expect(fs.statSync(settingsPath()).mtimeMs).toBe(beforeMtimeMs);
+    expect(fs.existsSync(settingsPath() + ".tmp")).toBe(false);
+  });
+
+  it("never creates settings.json when it is absent", () => {
+    readEffectiveSettings({});
+    expect(fs.existsSync(settingsPath())).toBe(false);
+  });
+
+  it("does not disturb the writer: saveConfig still round-trips after an effective read", () => {
+    readEffectiveSettings({ getSettings: () => ({ "test.ns": { from: "host" } }) });
+    saveConfig("test.ns", { from: "file" });
+    expect(loadConfig("test.ns", { from: "" })).toEqual({ from: "file" });
   });
 });

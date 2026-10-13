@@ -28,6 +28,7 @@
     "./profiler": "./src/profiler.ts",
     "./screen-mode": "./src/screen-mode.ts",
     "./log": "./src/log.ts",
+    "./pi-support": "./src/pi-support.ts",
     "./tool-render": "./src/tool-render.ts"
   },
   "peerDependencies": {

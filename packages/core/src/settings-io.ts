@@ -34,6 +34,48 @@ function readSettings(): Record<string, unknown> {
 }
 
 /**
+ * Read the settings the running pi actually applies: `pi.getSettings()` when
+ * the host exposes it, otherwise the file read.
+ *
+ * `getSettings()` returns the *effective* object — global settings merged with
+ * project settings (`<cwd>/.pi/settings.json`) and any in-process overrides —
+ * which a hand-rolled read of `~/.pi/agent/settings.json` cannot see. It lives
+ * on **`ExtensionAPI`**, not on `ExtensionContext` (`extensions/types.d.ts:1286`
+ * in pi 1.2.0), so a call site must pass the `pi` handle, never `ctx`.
+ *
+ * The fallback is not decoration: it is what keeps `core`'s peer floor at
+ * `>=0.85.0` (ADR 0013 / ADR 0026), because `getSettings` is younger than that
+ * floor. It also covers pi refusing the call — the handle's wrapper asserts an
+ * active extension context and throws otherwise — and a host that hands back
+ * something that is not an object. Anything unusable falls through to the file.
+ *
+ * Reads only. There is no matching write path: pi exposes no public settings
+ * writer, so `saveConfig` keeps its symlink-preserving tmp+rename behaviour
+ * (docs/features/symlink-preserving-settings-writes.md).
+ *
+ * @param pi the `ExtensionAPI` handle, or nothing at all (headless call sites,
+ *           tests, and every pi without the API).
+ */
+export function readEffectiveSettings(pi?: unknown): Record<string, unknown> {
+  const getSettings = (pi as { getSettings?: unknown } | null | undefined)?.getSettings;
+  if (typeof getSettings === "function") {
+    try {
+      const effective = (getSettings as () => unknown).call(pi);
+      // An object is the only usable answer; `undefined`/`null`/a scalar mean
+      // the host had nothing to say, which is the file read's job.
+      if (typeof effective === "object" && effective !== null && !Array.isArray(effective)) {
+        return effective as Record<string, unknown>;
+      }
+    } catch {
+      // pi asserts the extension is active before answering, so the call can
+      // refuse. A settings read is never allowed to be the reason something
+      // failed, so fall through to the file.
+    }
+  }
+  return readSettings();
+}
+
+/**
  * Load a config section from settings.json, merged with defaults.
  */
 export function loadConfig<T>(

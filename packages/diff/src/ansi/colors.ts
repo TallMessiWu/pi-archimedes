@@ -8,12 +8,11 @@ import { BG_DEFAULT, DEFAULT_DIFF_BG, FG_RULE } from "./codes.js";
 // ---------------------------------------------------------------------------
 //
 // This parser is a deliberate sibling of `parseAnsiFgToRgb` in
-// `packages/core/src/color.ts`. `diff` is a standalone, independently
-// installable package, so it keeps its own copy of the xterm table rather than
-// depending on `@pi-archimedes/core` — the duplication is the accepted price of
-// that. The sibling is not reusable as-is for one reason: core is anchored to
-// `^\x1b[38;` (foreground slot only), while this one reads `38|48` because it is
-// fed **background** strings, straight from `theme.getBgAnsi(...)`.
+// `packages/core/src/color.ts`; `pi-support.ts` is the one place that says what
+// keeping such a copy costs and why it is worth it. The sibling is not reusable
+// as-is for one reason: core is anchored to `^\x1b[38;` (foreground slot only),
+// while this one reads `38|48` because it is fed **background** strings, straight
+// from `theme.getBgAnsi(...)`.
 
 interface RGB {
 	r: number;

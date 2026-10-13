@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@e
 
 import { time as archTime, print as archPrintTimings, reset as archResetTimings } from "@pi-archimedes/core/profiler";
 import { diag } from "@pi-archimedes/core/log";
+import { takePiSupportNotice } from "@pi-archimedes/core/pi-support";
 import { registerCore } from "@pi-archimedes/core";
 import { registerUI, unpatchConsoleLog } from "@pi-archimedes/ui";
 import { registerFooter } from "@pi-archimedes/footer";
@@ -168,6 +169,20 @@ export default function (pi: ExtensionAPI): void {
     }
     if (webMod) {
       webMod.registerWeb(pi);
+    }
+
+    // One aggregated host-version notice, never one per package (ADR 0026).
+    // Every package reports during its own registration — the ones above, and
+    // `ui`/`footer`/… from the factory — so this is the only place the suite
+    // shows it. Reading the notice spends it: a second `session_start` (`/new`,
+    // `/fork`) or a `/reload` (fresh modules, same process, and the same pi
+    // version — it cannot change without a restart) stays quiet. `notify` is a
+    // no-op outside a UI, so `diag` records it too: headless runs and subagent
+    // children have no surface to show, but they do have the log file.
+    const piNotice = takePiSupportNotice();
+    if (piNotice) {
+      diag("meta", piNotice);
+      ctx.ui?.notify?.(piNotice, "warning");
     }
   });
 

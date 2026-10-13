@@ -14,6 +14,7 @@ import type { DiffBg, DiffColors } from "./ansi/index.js";
 import { resetDiffColors } from "./ansi/index.js";
 import { registerWriteTool, registerEditTool } from "./tools/index.js";
 import { diag } from "./log.js";
+import { reportPiSupport } from "./pi-support.js";
 
 // ---------------------------------------------------------------------------
 // Re-exports
@@ -112,6 +113,14 @@ export function registerDiffTools(
 	_getTheme: () => Theme,
 	readConfig: () => DiffConfig,
 ): void {
+	// Floor check first, before anything can fail: pi 1.x APIs this package now
+	// relies on are not guaranteed below 1.2.0, and a peer range cannot warn
+	// anyone because pi never installs or solves peers (ADR 0026). Warn and
+	// carry on — a `diff` that declined to load would make /plugins report an
+	// enabled package that registered nothing. Idempotent per package, and this
+	// runs again on every session_start.
+	reportPiSupport("diff", "1.2.0");
+
 	_readConfig = readConfig;
 
 	// Reset theme-derived colors so they are re-derived from the current theme

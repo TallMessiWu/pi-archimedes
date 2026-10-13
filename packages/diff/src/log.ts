@@ -8,11 +8,10 @@ import { appendFileSync } from "node:fs";
 // non-JSON stdout line). Diagnostics therefore go to `$PI_ARCHIMEDES_LOG`, and
 // messages the user must see go to the notification surface.
 //
-// Why a copy rather than the import: `diff` is a standalone, independently
-// installable package and keeps no dependency on `@pi-archimedes/core` — the
-// same trade `ansi/colors.ts` documents for the xterm table. The canonical
-// implementation is `packages/core/src/log.ts`; keep the two in step (pinned
-// here by `log.test.ts`, which mirrors `core/src/log.test.ts`).
+// Why a copy rather than the import: `diff` is standalone, and `pi-support.ts`
+// is the one place that states what that costs and why it is worth it. The
+// canonical implementation is `packages/core/src/log.ts`; keep the two in step
+// (pinned here by `log.test.ts`, which mirrors `core/src/log.test.ts`).
 
 /**
  * Append one diagnostic line to `$PI_ARCHIMEDES_LOG`.
