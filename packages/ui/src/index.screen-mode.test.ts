@@ -9,12 +9,17 @@ vi.hoisted(() => {
   process.env.COLORTERM = "truecolor";
 });
 
-// ── Screen-mode gate (ADR 0027) ─────────────────────────────────────────────
+// ── Screen mode (ADR 0027) ───────────────────────────────────────────────────
 //
-// The startup splash animation and the startup resource listing both append
-// into terminal scrollback, which fullscreen screen does not have. They
-// install from the header factory — the one place the current renderer is in
-// hand — so the capability is read there, per call.
+// Two things used to be gated on the screen: the splash animation and the
+// startup resource listing. The listing was scraped out of pi's component tree
+// and re-rendered into the header, appending into terminal scrollback — which
+// fullscreen screen does not have. Task 8 deleted that half (pi owns its
+// listing now, and `quietStartup` is the supported knob), leaving the logo
+// animation, which only advances a frame counter and asks *the renderer we were
+// just handed* for a frame. That is screen-safe, so the gate is gone; what
+// still differs per screen is the height the header sizes itself against, read
+// from the same per-call capability check.
 //
 // `isViewportTUI` is faked by marker so a single test file can present both
 // screens to the same module instance: a fake renderer carrying
@@ -28,31 +33,33 @@ vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
   };
 });
 
-vi.mock("@pi-archimedes/core/settings-io", () => ({
-  loadConfig: vi.fn(),
-  saveConfig: vi.fn(),
-  removeConfig: vi.fn(),
-}));
+// Real `readEffectiveSettings` (the splash reads pi's `quietStartup` through
+// it); the namespace helpers are stubbed because the UI config they serve is
+// stubbed below.
+vi.mock("@pi-archimedes/core/settings-io", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@pi-archimedes/core/settings-io")>();
+  return {
+    ...actual,
+    loadConfig: vi.fn(),
+    saveConfig: vi.fn(),
+    removeConfig: vi.fn(),
+  };
+});
 
 vi.mock("./config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./config.js")>();
   return { ...actual, loadUIConfig: vi.fn() };
 });
 
-vi.mock("./startup/capture.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./startup/capture.js")>();
-  return { ...actual, patchConsoleLog: vi.fn(), unpatchConsoleLog: vi.fn() };
-});
-
 vi.mock("./thinking/patch.js", () => ({ patchThinkingRenderer: vi.fn() }));
 vi.mock("./thinking/transform.js", () => ({ transformThinkingContent: vi.fn() }));
 
-// `renderHeader` stays real on purpose. The fullscreen gate is only correct if
-// the header it leaves behind actually renders finished content, and that is
-// invisible when the function is stubbed with a fixed string.
+// `patchStartupListing` and `renderHeader` stay real on purpose: what these
+// tests assert is which renderer the animation drives and how tall the header
+// comes out, and both are invisible through a stub.
 vi.mock("./startup/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./startup/index.js")>();
-  return { ...actual, patchStartupListing: vi.fn() };
+  return { ...actual, revealStartupListing: vi.fn(), stopStartupListing: vi.fn() };
 });
 
 vi.mock("./migration.js", () => ({
@@ -75,12 +82,15 @@ vi.mock("./codemode/index.js", () => ({
 import { registerUI } from "./index.js";
 import { stripAnsi } from "@pi-archimedes/core/text";
 import { loadUIConfig, DEFAULT_UI_CONFIG } from "./config.js";
-import { patchStartupListing } from "./startup/index.js";
+import { stopStartupListing } from "./startup/index.js";
 import { getShinedLogo, LOGO, LOGO_SETTLE_FRAME } from "./startup/logo.js";
 
 // ── Harness ─────────────────────────────────────────────────────────────────
 
-type HeaderFactory = (tui: TUI, theme: Theme) => { render(width: number): string[] };
+type HeaderFactory = (tui: TUI, theme: Theme) => {
+  render(width: number): string[];
+  dispose?(): void;
+};
 
 function startSession(): { headerFactory: HeaderFactory } {
   const listeners: Record<string, ((event: any, ctx: any) => void)[]> = {};
@@ -90,12 +100,14 @@ function startSession(): { headerFactory: HeaderFactory } {
       listeners[event]!.push(handler);
     }),
     registerTool: vi.fn(),
+    getSettings: vi.fn(() => ({})),
   } as unknown as ExtensionAPI;
 
   const setHeader = vi.fn();
   const ctx = {
     hasUI: true,
     cwd: "/workspace/test-project",
+    scopedModels: [],
     ui: {
       setHeader,
       setEditorComponent: vi.fn(),
@@ -117,7 +129,7 @@ const regularTui = (): TUI => ({ terminal: { rows: 24 }, requestRender: vi.fn() 
 const viewportTui = (): TUI =>
   ({ terminal: { rows: 24 }, requestRender: vi.fn(), __viewport: true }) as unknown as TUI;
 
-describe("startup splash gate on screen capability", () => {
+describe("startup splash on either screen", () => {
   let warn: ReturnType<typeof vi.spyOn>;
   let error: ReturnType<typeof vi.spyOn>;
 
@@ -129,42 +141,45 @@ describe("startup splash gate on screen capability", () => {
   });
 
   afterEach(() => {
+    stopStartupListing();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it("installs the startup listing on regular screen, quietly", () => {
-    const { headerFactory } = startSession();
-    const tui = regularTui();
+  for (const [label, makeTui] of [
+    ["regular screen", regularTui],
+    ["fullscreen screen", viewportTui],
+  ] as const) {
+    it(`animates the splash on ${label}, driving the renderer it was handed`, () => {
+      vi.useFakeTimers();
+      const { headerFactory } = startSession();
+      const tui = makeTui();
 
-    headerFactory(tui, {} as Theme);
+      headerFactory(tui, {} as Theme);
+      vi.advanceTimersByTime(100);
 
-    expect(patchStartupListing).toHaveBeenCalledTimes(1);
-    expect(patchStartupListing).toHaveBeenCalledWith(tui, expect.anything(), expect.any(Object));
-    expect(warn).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
-  });
+      // The frame timer runs, and it asks *this* renderer for its frames.
+      expect((tui as unknown as { requestRender: ReturnType<typeof vi.fn> }).requestRender)
+        .toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+    });
+  }
 
-  it("suppresses the startup listing on fullscreen screen, quietly", () => {
-    const { headerFactory } = startSession();
-
-    headerFactory(viewportTui(), {} as Theme);
-
-    expect(patchStartupListing).not.toHaveBeenCalled();
-    // Suppressing is a promise, not a defect: no diagnostic about it.
-    expect(warn).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
-  });
-
-  it("keeps rendering our header on fullscreen screen, where only the listing is gated", () => {
+  it("stops asking for frames once the logo settles, on either screen", () => {
+    vi.useFakeTimers();
     const { headerFactory } = startSession();
 
-    const comp = headerFactory(viewportTui(), {} as Theme);
+    for (const tui of [regularTui(), viewportTui()]) {
+      headerFactory(tui, {} as Theme);
+      const requestRender = (tui as unknown as { requestRender: ReturnType<typeof vi.fn> }).requestRender;
+      vi.advanceTimersByTime(3_000);
+      const settled = requestRender.mock.calls.length;
+      expect(settled).toBeGreaterThan(0);
 
-    // ctx.ui.setHeader() is screen-mode independent: the header component is
-    // still ours and still draws; it just has no captured sections to show.
-    expect(comp.render(80).length).toBeGreaterThan(0);
-    expect(comp.render(80).join("\n")).toContain("█");
-    expect(patchStartupListing).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(3_000);
+      expect(requestRender.mock.calls.length).toBe(settled);
+    }
   });
 
   it("re-reads the screen per call instead of caching the first renderer", () => {
@@ -172,26 +187,24 @@ describe("startup splash gate on screen capability", () => {
 
     // Same factory, renderer swapped underneath it — what switchTuiMode()
     // effectively does by handing the factory a brand new TUI.
-    headerFactory(regularTui(), {} as Theme);
-    expect(patchStartupListing).toHaveBeenCalledTimes(1);
+    const regular = headerFactory(regularTui(), {} as Theme);
+    expect(regular.render(80)).toHaveLength(21);
 
-    headerFactory(viewportTui(), {} as Theme);
-    expect(patchStartupListing).toHaveBeenCalledTimes(1);
+    const viewport = headerFactory(viewportTui(), {} as Theme);
+    expect(viewport.render(80).length).toBeLessThan(21);
 
-    headerFactory(regularTui(), {} as Theme);
-    expect(patchStartupListing).toHaveBeenCalledTimes(2);
+    const backToRegular = headerFactory(regularTui(), {} as Theme);
+    expect(backToRegular.render(80)).toHaveLength(21);
   });
 });
 
 // ── What the header actually draws on each screen ───────────────────────────
 //
-// Declining to install the splash is only half of it. The animation timer and
-// the section reveal both live in `patchStartupListing`, so on fullscreen
-// screen nothing advances the listing ref: left alone it is drawn forever in
-// the animation's *initial* state — `getShinedLogo(0, …)` hides every
-// character whose reveal frame has not arrived — and it is sized to the
-// terminal it would have scrolled through, which inside a viewport means a
-// header the height of the screen.
+// Installing the splash on both screens is only half of it. The header is
+// drawn from the animation ref, so it must arrive at the finished state
+// whatever the screen, and it must not be sized to a terminal it does not
+// scroll through: inside a viewport a header padded to `rows - 3` would be the
+// whole screen and leave the editor nothing to render in.
 describe("header output per screen mode", () => {
   const ROWS = 24;
   const THEME = { fg: (_token: string, text: string) => text } as unknown as Theme;
@@ -200,14 +213,26 @@ describe("header output per screen mode", () => {
     vi.mocked(loadUIConfig).mockReturnValue({ ...DEFAULT_UI_CONFIG });
   });
 
-  /** The settled logo rows, as the completed splash would draw them. */
+  afterEach(() => {
+    stopStartupListing();
+    vi.useRealTimers();
+  });
+
+  /** The settled logo rows, as the completed splash draws them. */
   const settledLogoRows = (): string[] =>
     getShinedLogo(LOGO_SETTLE_FRAME, DEFAULT_UI_CONFIG.animationStyle, DEFAULT_UI_CONFIG.colorfulLogo);
 
-  it("draws the settled logo on fullscreen screen, not the animation's first frame", () => {
+  /** Install the splash, then let the animation run to its end. */
+  function settled(tui: TUI): string[] {
+    vi.useFakeTimers();
     const { headerFactory } = startSession();
+    const comp = headerFactory(tui, THEME);
+    vi.advanceTimersByTime(3_000);
+    return comp.render(80).map((l) => l.trim());
+  }
 
-    const lines = headerFactory(viewportTui(), THEME).render(80).map((l) => l.trim());
+  it("draws the settled logo on fullscreen screen, not the animation's first frame", () => {
+    const lines = settled(viewportTui());
 
     // Content = the logo at rest, then the blank separator line. Nothing else.
     expect(lines).toEqual([...settledLogoRows().map((l) => l.trim()), ""]);
@@ -217,14 +242,12 @@ describe("header output per screen mode", () => {
   });
 
   it("does not pad the header to terminal height on a frame-bounded screen", () => {
-    const { headerFactory } = startSession();
-
-    const lines = headerFactory(viewportTui(), THEME).render(80);
+    const lines = settled(viewportTui());
 
     // The viewport allocates its own height; a header padded to `rows - 3`
     // would be the entire screen and leave the editor nothing to render in.
     expect(lines).toHaveLength(LOGO.length + 1);
-    expect(lines.filter((l) => l.trim() === "")).toHaveLength(1);
+    expect(lines.filter((l) => l === "")).toHaveLength(1);
   });
 
   it("still sizes the header to the terminal on regular screen, where the splash scrolls away", () => {
