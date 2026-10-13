@@ -22,8 +22,13 @@ import { fileURLToPath } from "node:url";
 // The pattern demands the open parenthesis, so it is narrower than a loose
 // `grep console.log`: a monkey-patch site (`console.log = (…) => {…}`,
 // `let orig: typeof console.log`) is not a write and is not reported here.
-
-const PATTERN = /console\.(log|warn|error)\(/;
+//
+// Every *method* is covered, not just log/warn/error. `console.info` and
+// `console.debug` land on stdout/stderr exactly like `console.log`, and
+// `console.trace`/`dir`/`table`/`group`/`count`/`clear` write too (and `clear`
+// wipes the frame outright), so naming a subset would leave a guard that stays
+// green while a future write corrupts the display.
+const PATTERN = /console\.[a-zA-Z]+\(/;
 
 interface AllowEntry {
   readonly file: string;
@@ -126,12 +131,24 @@ describe("console discipline: no console writes from render or event paths", () 
     expect(VIOLATIONS.map((v) => `${v.file}:${v.line} ${v.text}`)).toEqual([]);
   });
 
-  it("matches writes and not patch sites (the guard is not a loose grep)", () => {
+  it("matches any console write and not a patch site (the guard is not a loose grep)", () => {
     const offenders = [
       'console.log("x");',
       '  console.warn(`y`);',
       "console.error(err);",
       "if (bad) console.error('nope');",
+      // The rest of the console writes to the terminal just as hard. `info` and
+      // `debug` used to be *pinned* as allowed here, which encoded the hole in
+      // the guard rather than the rule; the suite has none today, so widening
+      // costs nothing and closes it.
+      'console.info("x");',
+      'console.debug("x");',
+      "console.trace('here');",
+      'console.dir(obj);',
+      'console.table(rows);',
+      'console.group("g");',
+      "console.count();",
+      "console.clear();",
     ];
     for (const line of offenders) {
       expect(PATTERN.test(line), `expected the guard to reject: ${line}`).toBe(true);
@@ -147,8 +164,7 @@ describe("console discipline: no console writes from render or event paths", () 
       "_origLog = console.log;",
       "console.log = _origLog;",
       "// Patch console.log for model scope capture",
-      "console.info(\"x\");",
-      "console.debug(\"x\");",
+      "const orig = Object.getOwnPropertyDescriptor(console, 'log');",
     ];
     for (const line of fine) {
       expect(PATTERN.test(line), `expected no rule to reject: ${line}`).toBe(false);
