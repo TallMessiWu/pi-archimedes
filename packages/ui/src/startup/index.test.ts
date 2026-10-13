@@ -174,6 +174,51 @@ describe("patchStartupListing section parsing", () => {
 	});
 });
 
+describe("renderHeader section set", () => {
+	// The rendered set is whatever the addChild patch captured — pi decides
+	// which sections exist, so nothing here may assert a fixed list.
+	const linesFor = (sections: ListingRef["sections"]): string[] =>
+		renderHeader(THEME, { ...makeRef(), sections }, 200, 60);
+
+	it("renders captured sections in capture order", () => {
+		// pi 1.2.0 emits Context, Skills, Prompts, Extensions — note Skills
+		// before Prompts, which a hardcoded display order used to invert.
+		const lines = linesFor([
+			{ name: "Context", items: ["AGENTS.md"] },
+			{ name: "Skills", items: ["tdd"] },
+			{ name: "Prompts", items: ["/commit"] },
+			{ name: "Extensions", items: ["archimedes"] },
+		]);
+		const at = (name: string) => lines.findIndex((l) => l.includes(`[${name}]`));
+		expect(at("Context")).toBeGreaterThanOrEqual(0);
+		expect(at("Context")).toBeLessThan(at("Skills"));
+		expect(at("Skills")).toBeLessThan(at("Prompts"));
+		expect(at("Prompts")).toBeLessThan(at("Extensions"));
+	});
+
+	it("renders a section name the suite has never seen before", () => {
+		const lines = linesFor([{ name: "Widgets", items: ["gauge"] }]);
+		expect(lines.some((l) => l.includes("[Widgets]"))).toBe(true);
+		expect(lines.some((l) => l.includes("gauge"))).toBe(true);
+	});
+
+	it("renders nothing but the version block when no section was captured", () => {
+		const lines = linesFor([]);
+		for (const phantom of ["Models", "Context", "Prompts", "Skills", "Extensions", "Themes"]) {
+			expect(lines.some((l) => l.includes(`[${phantom}]`))).toBe(false);
+		}
+	});
+
+	it("skips a captured section whose item list is empty", () => {
+		const lines = linesFor([
+			{ name: "Skills", items: [] },
+			{ name: "Context", items: ["AGENTS.md"] },
+		]);
+		expect(lines.some((l) => l.includes("[Skills]"))).toBe(false);
+		expect(lines.some((l) => l.includes("[Context]"))).toBe(true);
+	});
+});
+
 describe("patchStartupListing animation timer", () => {
 	afterEach(() => vi.useRealTimers());
 

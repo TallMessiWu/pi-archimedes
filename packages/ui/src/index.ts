@@ -25,6 +25,7 @@ import {
   type UIConfig,
   type CoreConfig,
 } from "./config.js";
+import { screenCapabilities, screenMode } from "@pi-archimedes/core/screen-mode";
 import { getUISettingsItems } from "./settings.js";
 import { migrateCoreToUIConfig, migrateCompactThinkingToStyle, migrateRemovedToolPatch } from "./migration.js";
 import { registerBashToolOverride, clearActiveBashIntervals } from "./bash/index.js";
@@ -51,6 +52,9 @@ export {
 // Module-level state for session lifecycle
 let uiRef: ListingRef | undefined;
 let uiCtx: ExtensionContext | undefined;
+// Stored renderer — the one ADR 0027 forbids, and the one entry in the
+// guard's allow-list. It exists only for the shutdown un-patch below and goes
+// away with that patch in Task 8.
 let uiTui: TUI | undefined;
 
 let spinFlag = false;
@@ -192,7 +196,16 @@ export function registerUI(pi: ExtensionAPI): void {
             return renderHeader(theme, ref, width, tui.terminal.rows - 3);
           },
         };
-        patchStartupListing(tui, theme, ref);
+        // The splash animation and the startup resource listing both append
+        // into terminal scrollback, which fullscreen screen does not have —
+        // so they install on regular screen only (ADR 0027). The question is
+        // asked of the renderer we were just handed, every call: screen mode
+        // is mutable mid-session (`switchTuiMode()` rebuilds the TUI and
+        // re-invokes this factory), so caching the answer would keep the old
+        // screen's policy. Header replacement itself stays on every screen.
+        if (screenCapabilities(screenMode(tui)).transcriptWrite) {
+          patchStartupListing(tui, theme, ref);
+        }
         return comp;
       };
       ctx.ui.setHeader(headerFactory);
@@ -201,6 +214,10 @@ export function registerUI(pi: ExtensionAPI): void {
       ctx.ui.setWorkingVisible(!spinFlag);
 
       if (spinFlag) {
+        // The border spinner lives in the editor frame, not in scrollback, so
+        // it runs on either screen. The renderer is handed straight to the
+        // editor and never kept by us, and idleness is read from `ctx` rather
+        // than from the renderer, so a screen-mode switch cannot strand it.
         ctx.ui.setEditorComponent(
           (tui: TUI, editorTheme: EditorTheme, keybindings: KeybindingsManager) => {
             const theme = ctx.ui.theme;

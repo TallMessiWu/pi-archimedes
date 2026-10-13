@@ -1,7 +1,7 @@
 import { VERSION, type Theme } from "@earendil-works/pi-coding-agent";
 import { getShinedLogo, TRUECOLOR, LOGO_PAD, LOGO_SETTLE_FRAME } from "./logo.js";
 import { loadUIConfig } from "../config.js";
-import { detectSection, parseSectionText, parseModelScope, formatColumns, buildItemWrapper, type ParsedSection, SECTION_KEYS } from "./sections.js";
+import { detectSection, parseSectionText, parseModelScope, formatColumns, buildItemWrapper, type ParsedSection } from "./sections.js";
 import { fetchLatestVersion, compareVersions } from "./version.js";
 import { stripAnsi } from "@pi-archimedes/core/text";
 import { Text, Spacer, Container, type TUI, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
@@ -51,7 +51,7 @@ export function renderHeader(theme: Theme, ref: ListingRef, width: number, heigh
   if (ref.settled && ref.cachedLines && ref.cachedWidth === width && ref.cachedHeight === height) {
     listingLines = ref.cachedLines;
   } else {
-    const sectionsToRender: { name: "Version" | ParsedSection["name"]; items: string[] }[] = [];
+    const sectionsToRender: { name: string; items: string[] }[] = [];
 
     if (!ref.revealed) {
       // Logo only — sections appear together on reveal
@@ -61,11 +61,11 @@ export function renderHeader(theme: Theme, ref: ListingRef, width: number, heigh
       const latestStr = hasUpdate ? `Latest: ${accent("v" + latest)}` : `Latest: v${latest}`;
       sectionsToRender.push({ name: "Version", items: [`Local: v${VERSION}`, latestStr] });
 
-      // Display sections in SECTION_KEYS order, skip empty
-      const byName = new Map(ref.sections.map(s => [s.name, s]));
-      for (const key of SECTION_KEYS) {
-        const sec = byName.get(key);
-        if (sec && sec.items.length > 0) sectionsToRender.push(sec);
+      // Render what was actually captured, in the order pi added it — pi
+      // chooses which sections exist, so there is no list here to keep in
+      // step. Empty sections are pi's "nothing loaded", skip them.
+      for (const sec of ref.sections) {
+        if (sec.items.length > 0) sectionsToRender.push(sec);
       }
     }
 

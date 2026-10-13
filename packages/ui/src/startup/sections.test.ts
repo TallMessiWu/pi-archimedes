@@ -20,11 +20,15 @@ import {
 	extractName,
 	formatColumns,
 	buildItemWrapper,
-	SECTION_KEYS,
 	RAMP_FRAMES,
 } from "./sections.js";
+import * as sectionsModule from "./sections.js";
 
 // ── detectSection ────────────────────────────────────────────────────────────
+//
+// Pi owns the startup listing, so section names are pi's to choose. We
+// recognise the *shape* of a section header rather than a fixed vocabulary:
+// whatever pi prints gets captured and rendered.
 
 describe("detectSection", () => {
 	it("finds Models section key", () => {
@@ -47,8 +51,29 @@ describe("detectSection", () => {
 		expect(detectSection("[Extensions]\nfoo")).toBe("Extensions");
 	});
 
-	it("finds Themes section key", () => {
+	it("finds Themes section key (older pi still emits it)", () => {
 		expect(detectSection("[Themes]\ndark")).toBe("Themes");
+	});
+
+	it("captures a section name the suite has never heard of", () => {
+		// The point of shape-based detection: a section pi adds later is
+		// captured by this code as written, with no constant to edit.
+		expect(detectSection("[Widgets]\n/a/b/index.ts")).toBe("Widgets");
+		expect(parseSectionText("[Widgets]\n  /a/b/widget.ts")!.items).toEqual(["widget"]);
+	});
+
+	it("leaves pi's startup diagnostics to pi", () => {
+		// These share the container but are warnings, not resource sections —
+		// swallowing them into the splash would hide them from the user.
+		for (const warning of [
+			"[Skill conflicts]\n  dup skill",
+			"[Prompt conflicts]\n  dup prompt",
+			"[Extension issues]\n  failed to load",
+			"[Theme conflicts]\n  bad theme",
+		]) {
+			expect(detectSection(warning), warning).toBeUndefined();
+			expect(parseSectionText(warning)).toBeUndefined();
+		}
 	});
 
 	it("returns undefined for non-section text", () => {
@@ -59,13 +84,26 @@ describe("detectSection", () => {
 		expect(detectSection("")).toBeUndefined();
 	});
 
-	it("returns undefined for bracketed text that is not a section key", () => {
+	it("returns undefined for bracketed text that is not a section header", () => {
+		// Not the single Capitalised-word shape of pi's section headers.
 		expect(detectSection("[NotASection]")).toBeUndefined();
+		expect(detectSection("[WARNING]")).toBeUndefined();
+		expect(detectSection("[lowercase]")).toBeUndefined();
 	});
 
 	it("returns the first matching section key", () => {
 		const text = "[Models]\n[Context]";
 		expect(detectSection(text)).toBe("Models");
+	});
+});
+
+describe("sections module", () => {
+	it("carries no hardcoded list of startup sections", () => {
+		// pi 0.99.0 dropped [Themes] and 1.2.0 emits Context/Skills/Prompts/
+		// Extensions plus a model-scope line. A constant of "the sections" is
+		// a claim about pi's output that goes stale on its own schedule, so
+		// the module must not export one.
+		expect(Object.keys(sectionsModule)).not.toContain("SECTION_KEYS");
 	});
 });
 
