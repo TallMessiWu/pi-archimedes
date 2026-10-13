@@ -128,20 +128,36 @@ describe("width maths on terminal-hostile content", () => {
     expect(visibleWidth(padEnd(line, 20))).toBe(20);
   });
 
-  it("does not split an OSC 8 hyperlink mid-sequence when truncating", () => {
+  it("returns an OSC 8 hyperlink that already fits byte-for-byte", () => {
     const url = `https://example.com/${"a".repeat(40)}`;
     const line = `\x1b]8;;${url}\x07docs\x1b]8;;\x07`;
+    // 4 visible columns at a limit of 4: the no-cut path. pi-tui hands the input
+    // straight back, which is what makes a fitting row render identically to the
+    // old chrome. This is NOT the cutting case — see the next test.
+    expect(visibleWidth(line)).toBe(4);
+    expect(hardTruncate(line, 4)).toBe(line);
+  });
+
+  it("cuts inside an OSC 8 hyperlink without leaving a half-written sequence", () => {
+    const url = `https://example.com/${"a".repeat(40)}`;
+    const line = `\x1b]8;;${url}\x07documentation\x1b]8;;\x07`; // 13 visible columns
+    expect(visibleWidth(line)).toBe(13);
     const cut = hardTruncate(line, 4);
-    // The URL is invisible: it may only live inside its escape sequence, never
-    // as drawn text.
-    expect(stripTerminalSequences(cut)).toBe("docs");
-    // And no sequence was left unterminated — a half-written OSC swallows the
-    // rest of the row, which is how the old byte-walking truncator failed here.
+    // The cut really happened: four columns of the linked text survive.
+    expect(tuiVisibleWidth(cut)).toBe(4);
+    expect(stripTerminalSequences(cut)).toBe("docu");
+    // The URL stays inside its escape sequence and every OSC 8 opener is
+    // terminated — a half-written OSC swallows the rest of the row, which is how
+    // the old byte-walking truncator failed here (it produced the 3-column stub
+    // "\x1b]8;" for this exact input, with no BEL and no closing sequence).
     const opens = cut.match(/\x1b\]8;;/g) ?? [];
     const terminated = cut.match(/\x1b\]8;;[^\x07]*\x07/g) ?? [];
     expect(opens.length).toBeGreaterThan(0);
     expect(terminated.length).toBe(opens.length);
-    expect(tuiVisibleWidth(cut)).toBeLessThanOrEqual(4);
+    // And the cut emits an explicit hyperlink close plus a reset, so the styling
+    // and the link target cannot bleed into the padding and the closing border.
+    expect(cut).toContain("\x1b]8;;\x07");
+    expect(cut.endsWith("\x1b[0m")).toBe(true);
   });
 
   it("wraps a CJK line at the right column", () => {
