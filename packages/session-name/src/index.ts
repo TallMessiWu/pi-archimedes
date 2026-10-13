@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { loadConfig } from "@pi-archimedes/core/settings-io";
-import { diag } from "@pi-archimedes/core/log";
+import { diag, describeError } from "@pi-archimedes/core/log";
 import type { SettingItem } from "@earendil-works/pi-tui";
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -263,7 +263,7 @@ export async function generateTitle(
   } catch (e) {
     // Session replacement or print-mode teardown makes an in-flight title irrelevant.
     if (e instanceof Error && e.message.includes("stale after session replacement")) return;
-    diag("session-name", `[archimedes] session-name failed: ${e instanceof Error ? e.message : String(e)}`);
+    diag("session-name", `[archimedes] session-name failed: ${describeError(e)}`);
     onFailure();
   }
 }

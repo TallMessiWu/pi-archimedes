@@ -31,7 +31,10 @@ vi.mock("node:child_process", async (importOriginal) => {
 // A clipboard reader has no UI handle, and the console is not a surface: the
 // oversized-image report goes to the diagnostics sink (core/src/log.ts).
 const mockDiag = vi.hoisted(() => vi.fn());
-vi.mock("@pi-archimedes/core/log", () => ({ diag: mockDiag }));
+vi.mock("@pi-archimedes/core/log", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@pi-archimedes/core/log")>();
+  return { ...real, diag: mockDiag };
+});
 
 import { readClipboardImage, readClipboardImageViaNativeModule } from "./clipboard.js";
 

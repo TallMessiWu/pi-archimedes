@@ -53,7 +53,10 @@ vi.mock("@pi-archimedes/core/profiler", () => ({
 }));
 // Diagnostics go to the log sink, never the console (core/src/log.ts), so the
 // failure assertions below watch `diag`.
-vi.mock("@pi-archimedes/core/log", () => ({ diag: vi.fn() }));
+vi.mock("@pi-archimedes/core/log", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@pi-archimedes/core/log")>();
+  return { ...real, diag: vi.fn() };
+});
 import { diag } from "@pi-archimedes/core/log";
 vi.mock("@pi-archimedes/core", () => ({
   registerCore: vi.fn(),

@@ -12,7 +12,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { diag } from "@pi-archimedes/core/log";
+import { diag, describeError } from "@pi-archimedes/core/log";
 import { loadFooterConfig } from "./config.js";
 import { CostAccumulator } from "./cost-accumulator.js";
 import { getGitStatus, isInsideLinkedWorktree } from "./utils/git.js";
@@ -169,7 +169,7 @@ export function registerFooter(pi: ExtensionAPI): void {
             // The user has to learn the status bar went blank, but never from a
             // console write: detail to the log on every frame, one line to the
             // user, and only if there is a UI that can take it.
-            diag("footer", `[archimedes:footer] Render error: ${e instanceof Error ? e.message : String(e)}`);
+            diag("footer", `[archimedes:footer] Render error: ${describeError(e)}`);
             if (!renderFailureReported) {
               renderFailureReported = true;
               try {

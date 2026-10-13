@@ -132,3 +132,41 @@ describe("diag — the diagnostics sink", () => {
     expect(readFileSync(target, "utf8")).toContain("[core] line one\nline two");
   });
 });
+
+// ── describeError — what a swallowed error looks like in the log ───────────
+//
+// `console.error(scope, err)` used to print the stack. Routing a swallowed
+// error through a formatter that keeps only `err.message` would leave the log
+// with a message and no origin, and for these call sites the log is the ONLY
+// record: the write smears a fullscreen frame, and a subagent child discards
+// it. So the formatter keeps the whole `Error`, stack included. (The user-facing
+// surface keeps taking the message alone — see `describeError`'s doc.)
+
+import { describeError } from "./log.js";
+
+describe("describeError", () => {
+  function exploded(): Error {
+    // A named frame on purpose: the assertion below wants an origin, not just
+    // a message — that is the whole reason the stack is kept.
+    return new Error("listener exploded");
+  }
+
+  it("keeps the stack, which is the only source location a swallowed error ever gets", () => {
+    const text = describeError(exploded());
+    expect(text).toContain("listener exploded");
+    expect(text).toMatch(/\n\s+at\s+\S/);
+    expect(text).toContain("exploded");
+  });
+
+  it("falls back to the message when the error carries no stack", () => {
+    const err = new Error("no stack here");
+    delete (err as { stack?: string }).stack;
+    expect(describeError(err)).toBe("no stack here");
+  });
+
+  it("stringifies anything that is not an Error", () => {
+    expect(describeError("a string")).toBe("a string");
+    expect(describeError({ code: 42 })).toBe("[object Object]");
+    expect(describeError(undefined)).toBe("undefined");
+  });
+});

@@ -22,7 +22,7 @@ import {
   resolvePalette,
 } from "@pi-archimedes/core/chrome";
 import { isParentBorder, formatKey } from "@pi-archimedes/core/text";
-import { diag } from "@pi-archimedes/core/log";
+import { diag, describeError } from "@pi-archimedes/core/log";
 import { SPIN_INTERVALS, BorderTypeSpinner } from "./spin.js";
 export { spinFrame } from "./spin.js";
 import { pickQuip, QUIP_ROTATION_MAX_SECS, QUIP_ROTATION_MIN_SECS } from "./spin-quips.js";
@@ -383,10 +383,10 @@ export class HephaestusEditor extends CustomEditor {
 
       return [topEdge, ...raw.map(wrap), botEdge];
     } catch (e) {
-      // Re-thrown, so pi's own error handling still sees it: this line exists
-      // for the log file, because a console write here lands inside the frame
-      // being rendered.
-      diag("ui", `HephaestusEditor render error: ${e instanceof Error ? e.message : String(e)}`);
+      // Re-thrown, so pi's own error handling still sees it — and logged with
+      // its stack, because a console write here would land inside the frame
+      // being rendered and the log is the only record that survives.
+      diag("ui", `HephaestusEditor render error: ${describeError(e)}`);
       throw e;
     }
   }

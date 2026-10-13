@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig, updateConfig } from "@pi-archimedes/core/settings-io";
-import { diag } from "@pi-archimedes/core/log";
+import { diag, describeError } from "@pi-archimedes/core/log";
 import { OVERLAY_CHROME } from "@pi-archimedes/core/overlay";
 import {
   DEFAULT_UI_CONFIG,
@@ -59,7 +59,7 @@ export async function runOnboarding(ctx: ExtensionContext): Promise<void> {
       updateConfig(META_NS, { onboarded: false }, (c) => ({ ...c, onboarded: true })); // marker last
     } catch (err) {
       // marker NOT set → self-heals; the cause belongs in the log file.
-      diag("meta", `[archimedes] onboarding save failed: ${err instanceof Error ? err.message : String(err)}`);
+      diag("meta", `[archimedes] onboarding save failed: ${describeError(err)}`);
     }
   };
 

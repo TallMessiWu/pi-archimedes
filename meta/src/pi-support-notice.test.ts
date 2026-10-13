@@ -51,7 +51,10 @@ vi.mock("@pi-archimedes/core/profiler", () => ({
   print: vi.fn(),
   reset: vi.fn(),
 }));
-vi.mock("@pi-archimedes/core/log", () => ({ diag: vi.fn() }));
+vi.mock("@pi-archimedes/core/log", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@pi-archimedes/core/log")>();
+  return { ...real, diag: vi.fn() };
+});
 import { diag } from "@pi-archimedes/core/log";
 // NOTE: `@pi-archimedes/core/pi-support` is deliberately NOT mocked — the
 // registry and the spend-once semantics under test are its own.

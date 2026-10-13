@@ -5,7 +5,7 @@ import { detectSection, parseSectionText, parseModelScope, formatColumns, buildI
 import { fetchLatestVersion } from "./version.js";
 import { compareVersions } from "@pi-archimedes/core/pi-support";
 import { stripAnsi } from "@pi-archimedes/core/text";
-import { diag } from "@pi-archimedes/core/log";
+import { diag, describeError } from "@pi-archimedes/core/log";
 import { Text, Spacer, Container, type TUI, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 
 // Symbol keys (survive hot-reload)
@@ -395,10 +395,10 @@ export function patchStartupListing(
     try {
       origAddChild(component);
     } catch (err) {
-      diag("ui", `[archimedes] Error in resourcesContainer.addChild: ${err instanceof Error ? err.message : String(err)}`);
+      diag("ui", `[archimedes] Error in resourcesContainer.addChild: ${describeError(err)}`);
     }
   } catch (err) {
-    diag("ui", `[archimedes] Error in startup listing addChild handler: ${err instanceof Error ? err.message : String(err)}`);
+    diag("ui", `[archimedes] Error in startup listing addChild handler: ${describeError(err)}`);
   }
   };
 }

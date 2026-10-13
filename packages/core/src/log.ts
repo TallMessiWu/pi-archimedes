@@ -31,6 +31,9 @@ import { appendFileSync } from "node:fs";
  * silently ignored, because losing a log line is always cheaper than failing a
  * render, an event handler, or a session.
  *
+ * One *append* per call; the message is kept verbatim, so an entry built by
+ * `describeError` spans the lines of its stack — which is the point of it.
+ *
  * @param scope the package the line came from (e.g. `"session-name"`)
  * @param message the diagnostic text; multi-line text is kept verbatim
  */
@@ -42,4 +45,25 @@ export function diag(scope: string, message: string): void {
   } catch {
     // Logging must never be the reason something failed.
   }
+}
+
+/**
+ * An error, formatted for `diag` — stack included.
+ *
+ * Task 6 moved errors off the console, and handing an error object to the
+ * console used to print its stack on the way out. Formatting them down to
+ * `err.message` would trade a visible stack for an invisible one, and at the sites this exists for —
+ * a bus listener that threw, a footer frame that failed, a package whose
+ * `import()` was refused — the error is **swallowed**, so this log is the only
+ * place it is ever recorded and the stack is the only part naming its origin.
+ *
+ * Use the message alone (`err.message`) where someone on screen is about to
+ * read the text — `ctx.ui.notify`, a tool result, a widget. A stack belongs in a
+ * log file, never in a notification.
+ *
+ * @param err whatever a `catch` caught
+ */
+export function describeError(err: unknown): string {
+  if (err instanceof Error) return err.stack ?? err.message;
+  return String(err);
 }

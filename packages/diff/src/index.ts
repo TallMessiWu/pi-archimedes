@@ -101,10 +101,13 @@ try {
 	_TextComponent = tui.Text;
 } catch (error) {
 	// A missing SDK means the diff tool is not registered at all, which is a
-	// developer-facing structural failure — the log file, never the console.
+	// developer-facing structural failure — the log file, never the console, and
+	// with the stack: this error is swallowed, so nothing else ever prints it.
+	// (Inlined rather than imported: `describeError` lives in core, which a
+	// standalone install does not have — see `pi-support.ts`.)
 	diag(
 		"diff",
-		`[diff] failed to load Pi SDK: ${error instanceof Error ? error.message : String(error)}`,
+		`[diff] failed to load Pi SDK: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
 	);
 }
 

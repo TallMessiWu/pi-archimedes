@@ -70,7 +70,10 @@ vi.mock("@pi-archimedes/core/settings-io", () => ({
 // Diagnostics never go to the console (see packages/core/src/log.ts): a write
 // there smears a fullscreen frame and is discarded inside a subagent child. So
 // every "it said something / it said nothing" assertion below watches `diag`.
-vi.mock("@pi-archimedes/core/log", () => ({ diag: vi.fn() }));
+vi.mock("@pi-archimedes/core/log", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@pi-archimedes/core/log")>();
+  return { ...real, diag: vi.fn() };
+});
 
 const clearDiag = () => vi.mocked(diag).mockClear();
 

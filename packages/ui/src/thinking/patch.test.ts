@@ -115,7 +115,10 @@ describe("patchThinkingRenderer", () => {
 			highlightCode: vi.fn(),
 		}));
 		const diag = vi.fn();
-		vi.doMock("@pi-archimedes/core/log", () => ({ diag }));
+		vi.doMock("@pi-archimedes/core/log", async (importOriginal) => {
+			const real = await importOriginal<typeof import("@pi-archimedes/core/log")>();
+			return { ...real, diag };
+		});
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const notify = vi.fn();
 
@@ -155,7 +158,10 @@ describe("patchThinkingRenderer", () => {
 			highlightCode: vi.fn(),
 		}));
 		const diag = vi.fn();
-		vi.doMock("@pi-archimedes/core/log", () => ({ diag }));
+		vi.doMock("@pi-archimedes/core/log", async (importOriginal) => {
+			const real = await importOriginal<typeof import("@pi-archimedes/core/log")>();
+			return { ...real, diag };
+		});
 
 		try {
 			const patch = await importPatch();
