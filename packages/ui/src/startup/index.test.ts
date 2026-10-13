@@ -148,6 +148,25 @@ describe("patchStartupListing section parsing", () => {
 		expect((resources as any).children.length).toBe(0);
 	});
 
+	it("does not swallow a pi diagnostic whose body mentions a bracketed word", () => {
+		const { tui, resources } = makeTui();
+		lastResources = resources;
+		const ref = makeRef();
+		patchStartupListing(tui, THEME, ref);
+
+		// pi's own `[Extension issues]` warning: its title is out of the
+		// section shape, but its body is arbitrary text from the failing
+		// extension. Reading "[Broken]" as a header here would hide the error.
+		const comp = makeSectionComponent([
+			"[Extension issues]",
+			"  Cannot find module '/tmp/[Broken]/index.ts'",
+		]);
+		resources.addChild(comp);
+
+		expect((resources as any).children).toContain(comp);
+		expect(ref.sections).toEqual([]);
+	});
+
 	it("passes non-section text through to the original addChild", () => {
 		const { tui, resources } = makeTui();
 		lastResources = resources;

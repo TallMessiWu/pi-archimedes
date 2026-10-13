@@ -9,7 +9,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 // Pi owns the startup listing, so the set of sections is pi's to decide —
 // 0.99.0 dropped `[Themes]`, 1.2.0 prints Context/Skills/Prompts/Extensions
 // plus a model-scope line. Nothing in this module enumerates them: sections
-// are detected by header shape and rendered in the order they were captured.
+// are detected by the shape of a header that leads the text, and rendered in
+// the order they were captured.
 
 export interface ParsedSection {
   name: string;
@@ -32,12 +33,25 @@ export const MAX_STAGGER = BASE_FADE_DELAY + 5 * STAGGER_FRAMES;
 
 /**
  * A pi startup section header: a bracketed single Capitalised word
- * (`[Context]`, `[Extensions]`). The shape matters — the diagnostics pi
- * prints into the same container (`[Skill conflicts]`, `[Extension issues]`,
- * `[Prompt conflicts]`, `[Theme conflicts]`) carry a space, so they stay out
- * of the splash and are rendered by pi itself.
+ * (`[Context]`, `[Extensions]`) **leading** the component's text.
+ *
+ * Two independent reasons the anchor is load-bearing:
+ * - The shape keeps the diagnostics pi prints into the same container out of
+ *   the splash (`[Skill conflicts]`, `[Extension issues]`, `[Prompt
+ *   conflicts]`, `[Theme conflicts]` all carry a space in the title).
+ * - Those diagnostics' *bodies* are arbitrary text from the failing resource
+ *   (pi's `formatDiagnostics` prints the message verbatim), so a bracketed
+ *   Capitalised word can appear inside one. Matched anywhere but the start,
+ *   that warning becomes a "section", and the startup `addChild` patch then
+ *   swallows the diagnostic — an error silently deleted from the user's view.
+ *
+ * Real sections always lead: pi builds each one as
+ * `` `${sectionHeader(name)}\n${body()}` `` (`addLoadedSection`,
+ * pi-coding-agent `dist/modes/interactive/interactive-mode.js`, unchanged
+ * 0.87→1.2.0), and callers hand us `stripAnsi` output, which trims, so
+ * leading indentation cannot hide a header either.
  */
-const SECTION_HEADER = /\[([A-Z][a-z]+)\]/;
+const SECTION_HEADER = /^\[([A-Z][a-z]+)\]/;
 
 export function detectSection(plain: string): string | undefined {
   return SECTION_HEADER.exec(plain)?.[1];

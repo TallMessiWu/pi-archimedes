@@ -36,7 +36,7 @@ describe("detectSection", () => {
 	});
 
 	it("finds Context section key", () => {
-		expect(detectSection("some text [Context] more")).toBe("Context");
+		expect(detectSection("[Context]\n  /home/me/AGENTS.md")).toBe("Context");
 	});
 
 	it("finds Prompts section key", () => {
@@ -44,7 +44,17 @@ describe("detectSection", () => {
 	});
 
 	it("finds Skills section key", () => {
-		expect(detectSection("Skills: [Skills] list")).toBe("Skills");
+		expect(detectSection("[Skills]\n  git:github.com/foo/bar")).toBe("Skills");
+	});
+
+	it("ignores a bracketed word that does not lead the text", () => {
+		// pi always builds a section as `[Name]\n<body>`, so a header-shaped
+		// word with anything in front of it is content, not a header: it is
+		// either a diagnostic body or a sentence, and swallowing it would hide
+		// pi's own text. See SECTION_HEADER for the pi citation.
+		expect(detectSection("some text [Context] more")).toBeUndefined();
+		expect(detectSection("Skills: [Skills] list")).toBeUndefined();
+		expect(parseSectionText("Loading [Extensions] from workspace")).toBeUndefined();
 	});
 
 	it("finds Extensions section key", () => {
@@ -73,6 +83,24 @@ describe("detectSection", () => {
 		]) {
 			expect(detectSection(warning), warning).toBeUndefined();
 			expect(parseSectionText(warning)).toBeUndefined();
+		}
+	});
+
+	it("does not mistake a bracketed word in a warning body for a section header", () => {
+		// pi builds a diagnostic as `[Extension issues]\n<message>` where
+		// <message> is arbitrary text from the failing extension (pi's
+		// formatDiagnostics prints `d.message` verbatim), so it can contain a
+		// bracketed Capitalised word — a path segment, an error tag. That text
+		// belongs to pi: matching it as a header makes the startup `addChild`
+		// patch swallow the whole warning, deleting an error from the user's
+		// screen and rendering its contents as a splash section.
+		for (const warning of [
+			"[Extension issues]\n  Cannot find module '/tmp/[Broken]/index.ts'",
+			"[Skill conflicts]\n  \"run\" collision in [Widgets] directory",
+			"[Theme conflicts]\n  unexpected token [Syntax] at line 4",
+		]) {
+			expect(detectSection(warning), warning).toBeUndefined();
+			expect(parseSectionText(warning), warning).toBeUndefined();
 		}
 	});
 
