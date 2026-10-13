@@ -34,7 +34,9 @@ vi.mock("./version.js", () => ({
 // ── Imports ──────────────────────────────────────────────────────────────────
 
 import { Text, Container } from "@earendil-works/pi-tui";
-import { patchStartupListing, renderHeader, type ListingRef } from "./index.js";
+import { stripAnsi } from "@pi-archimedes/core/text";
+import { patchStartupListing, renderHeader, settleHeader, CONTENT_ONLY_HEIGHT, type ListingRef } from "./index.js";
+import { LOGO, LOGO_SETTLE_FRAME } from "./logo.js";
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -235,6 +237,41 @@ describe("renderHeader section set", () => {
 		]);
 		expect(lines.some((l) => l.includes("[Skills]"))).toBe(false);
 		expect(lines.some((l) => l.includes("[Context]"))).toBe(true);
+	});
+});
+
+describe("settleHeader", () => {
+	// The state a frame-bounded screen hands to renderHeader when the splash is
+	// suppressed: nothing will animate it, so it must already be finished.
+	it("leaves the ref where a completed splash would, not at frame 0", () => {
+		const ref: ListingRef = {
+			...makeRef(),
+			frame: 3,
+			sections: [{ name: "Skills", items: ["tdd"] }],
+			cachedLines: ["stale"],
+			cachedWidth: 80,
+			cachedHeight: 24,
+		};
+
+		settleHeader(ref);
+
+		expect(ref.frame).toBe(LOGO_SETTLE_FRAME);
+		expect(ref.revealed).toBe(false);
+		expect(ref.sections).toEqual([]);
+		expect(ref.cachedLines).toBeUndefined();
+	});
+
+	it("renders the logo at rest with no listing and no stray blank rows", () => {
+		const ref: ListingRef = { ...makeRef(), frame: 0, revealed: false };
+		settleHeader(ref);
+
+		const lines = renderHeader(THEME, ref, 200, CONTENT_ONLY_HEIGHT);
+
+		// Logo rows plus their separator — and, unlike frame 0, actually drawn.
+		// (Stripped: a truecolor logo colours each block character separately.)
+		expect(lines).toHaveLength(LOGO.length + 1);
+		expect(stripAnsi(lines.join("\n"))).toContain("████");
+		expect(lines.filter((l) => l.includes("[") && l.includes("]"))).toEqual([]);
 	});
 });
 
