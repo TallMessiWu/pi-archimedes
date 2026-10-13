@@ -11,7 +11,11 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { CURSOR_MARKER, visibleWidth as tuiVisibleWidth } from "@earendil-works/pi-tui";
+import {
+  CURSOR_MARKER,
+  stripTerminalSequences,
+  visibleWidth as tuiVisibleWidth,
+} from "@earendil-works/pi-tui";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import { createSettingsManager, type PromptDescriptor } from "./settings-manager.js";
 import { createOnboardingOverlay } from "./onboarding/overlay.js";
@@ -87,6 +91,27 @@ function audit(surface: string, frameWidth: number, lines: string[]): Violation[
   return bad;
 }
 
+// ── Capture content checks ───────────────────────────────────────────────────
+//
+// A width audit only proves something if the captured frame is the frame it means
+// to measure. List search accepts printable ASCII only (`isPrintableChar` in
+// settings-manager.ts: `data.length === 1 && data >= " " && data <= "~"`), while
+// the free-text prompt field uses `isPromptTextChar`, which takes any single
+// non-control code point — so a wide-character prompt is real content and a
+// wide-character search query is not reachable at all. Each capture therefore
+// declares the content it expects and is checked before the frame is measured.
+
+/** Drawn text of the search row, border and padding removed, or undefined. */
+function searchRow(raw: string[]): string | undefined {
+  return raw
+    .map((l) => stripTerminalSequences(l).replace(/[│┌└┐┘─]/g, "").trim())
+    .find((l) => l.includes("Search:"));
+}
+
+function drawnIncludes(raw: string[], needle: string): boolean {
+  return raw.some((l) => stripTerminalSequences(l).includes(needle));
+}
+
 function makeManager() {
   return createSettingsManager({
     items: ITEMS.map((i) => ({ ...i })),
@@ -122,43 +147,101 @@ describe("overlay surfaces frame-width audit", () => {
     const over: Violation[] = [];
 
     for (const frameWidth of FRAME_WIDTHS) {
-      const capture = (surface: string, lines: string[]) => {
+      const capture = (
+        surface: string,
+        lines: string[],
+        expectContent?: (raw: string[]) => string | null,
+      ) => {
+        // Check the capture is what the audit thinks it is *before* measuring it.
+        const problem = expectContent?.(lines);
+        expect(problem ?? null, `${surface}@${frameWidth} is not the capture this audit measures`).toBeNull();
         const bad = audit(surface, frameWidth, lines);
         violations.push(...bad);
         over.push(...bad.filter((v) => v.measured > frameWidth));
       };
 
       // /archimedes settings — list, search (emits CURSOR_MARKER), prompt mode
-      capture("settings:list", makeManager().render(frameWidth));
+      capture("settings:list", makeManager().render(frameWidth), (raw) =>
+        drawnIncludes(raw, "界面表示の幅") ? null : "list rows not rendered",
+      );
 
+      // The search row with an empty query — the shape that carries the cursor
+      // marker. The wide keystrokes after `/` are dropped by the ASCII gate.
+      const searchingEmpty = makeManager();
+      searchingEmpty.handleInput("/");
+      for (const ch of "界面") searchingEmpty.handleInput(ch);
+      capture("settings:search-empty", searchingEmpty.render(frameWidth), (raw) => {
+        // Tripwire for that gate: if search ever accepts wide input, this capture
+        // has to feed the wide query — otherwise a CJK search row goes unmeasured
+        // and the frame-width claim quietly goes stale.
+        if (!raw.some((l) => l.includes(CURSOR_MARKER))) return "cursor marker not rendered";
+        const row = searchRow(raw);
+        if (row?.trim() !== "Search:")
+          return `search row is not the empty query: ${JSON.stringify(row?.trim())}`;
+        return null;
+      });
+
+      // A populated search row: `link` is accepted by the ASCII gate and matches
+      // exactly one fixture, so the filter result is checked, not assumed.
       const searching = makeManager();
       searching.handleInput("/");
-      for (const ch of "界面") searching.handleInput(ch);
-      capture("settings:search", searching.render(frameWidth));
+      for (const ch of "link") searching.handleInput(ch);
+      capture("settings:search", searching.render(frameWidth), (raw) => {
+        const row = searchRow(raw);
+        if (row?.trim() !== "Search: link")
+          return `search row does not show the query: ${JSON.stringify(row?.trim())}`;
+        if (!raw.some((l) => l.includes(CURSOR_MARKER))) return "cursor marker missing from the search row";
+        if (!drawnIncludes(raw, "docs")) return "filtered list lost the OSC 8 fixture row";
+        if (drawnIncludes(raw, "tinted")) return "search did not narrow the list";
+        return null;
+      });
 
+      // Prompt mode takes wide input (isPromptTextChar), so the value the audit
+      // types really does land in the drawn frame. On the narrowest frame the value
+      // fills the row, so its tail — and the zero-width cursor behind it — are cut
+      // onto the frame instead of overflowing it.
       const prompting = makeManager();
       prompting.handleInput("\x1b[B"); // down to the free-text "model" row
       prompting.handleInput("\x1b[B");
       prompting.handleInput("\x1b[B");
       prompting.handleInput("\r");
       for (const ch of "検証モデル名") prompting.handleInput(ch);
-      capture("settings:prompt", prompting.render(frameWidth));
+      capture("settings:prompt", prompting.render(frameWidth), (raw) => {
+        if (!drawnIncludes(raw, "検証")) return "prompt field does not show the typed wide value";
+        return null;
+      });
 
       // An empty filter result exercises the "no matching settings" row too.
       const noMatches = makeManager();
       noMatches.handleInput("/");
       for (const ch of "zzzz") noMatches.handleInput(ch);
-      capture("settings:no-matches", noMatches.render(frameWidth));
+      capture("settings:no-matches", noMatches.render(frameWidth), (raw) => {
+        if (searchRow(raw)?.trim() !== "Search: zzzz") return "search row does not show the query";
+        if (!drawnIncludes(raw, "No matching settings")) return "empty-filter row not rendered";
+        return null;
+      });
 
       // Onboarding — four steps, each with its own row shapes.
       const intro = makeOnboarding();
-      capture("onboarding:thinking", intro.render(frameWidth));
+      capture("onboarding:thinking", intro.render(frameWidth), (raw) =>
+        drawnIncludes(raw, "Thinking style") ? null : "thinking step not rendered",
+      );
       intro.handleInput("\r");
-      capture("onboarding:tool", intro.render(frameWidth));
+      capture("onboarding:tool", intro.render(frameWidth), (raw) =>
+        drawnIncludes(raw, "Tool output style") ? null : "tool step not rendered",
+      );
       intro.handleInput("\r");
-      capture("onboarding:plugins", intro.render(frameWidth));
+      capture("onboarding:plugins", intro.render(frameWidth), (raw) =>
+        drawnIncludes(raw, "Which plugins")
+          ? drawnIncludes(raw, "pluginlink")
+            ? null
+            : "plugin row carrying the OSC 8 label not rendered"
+          : "plugin step not rendered",
+      );
       intro.handleInput("\r");
-      capture("onboarding:spinner", intro.render(frameWidth));
+      capture("onboarding:spinner", intro.render(frameWidth), (raw) =>
+        drawnIncludes(raw, "Which spinner") ? null : "spinner step not rendered",
+      );
     }
 
     // Guard the fixtures: the marker is the shape that used to measure far too
