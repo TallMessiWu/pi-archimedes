@@ -583,3 +583,61 @@ describe("readEffectiveSettings", () => {
     expect(loadConfig("test.ns", { from: "" })).toEqual({ from: "file" });
   });
 });
+
+// ── The catch must not be invisible ────────────────────────────────────────
+//
+// `pi.getSettings()` refuses for the expected reason (the handle's wrapper
+// asserts an active extension context) AND for reasons that are bugs: the
+// runtime stub throws "Extension runtime not initialized" for a call made
+// during extension loading, and the real implementation can throw for anything
+// it chokes on. Falling back to the file is right in every case; falling back
+// without a trace is not, because the symptom of each of those is a silently
+// project-blind settings read.
+
+describe("readEffectiveSettings reports the reason it fell back", () => {
+  const ENV = "PI_ARCHIMEDES_LOG";
+  const settingsPath = () => join(tempDir, "settings.json");
+  const previous = process.env[ENV];
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env[ENV];
+    else process.env[ENV] = previous;
+    const p = settingsPath();
+    try { fs.unlinkSync(p); } catch { /* ignore */ }
+  });
+
+  it("logs the error when getSettings() throws, and still returns the file read", () => {
+    const target = join(tempDir, "effective-fallback.log");
+    process.env[ENV] = target;
+    fs.writeFileSync(
+      settingsPath(),
+      JSON.stringify({ "test.ns": { from: "file" } }),
+      "utf-8",
+    );
+
+    const pi = {
+      getSettings: () => {
+        throw new Error("Extension runtime not initialized");
+      },
+    };
+    expect(readEffectiveSettings(pi)).toEqual({ "test.ns": { from: "file" } });
+
+    const logged = fs.readFileSync(target, "utf-8");
+    expect(logged).toContain("[core]");
+    expect(logged).toContain("Extension runtime not initialized");
+    // With the stack, which is the part that says which call site did it.
+    expect(logged).toMatch(/\n\s+at\s+\S/);
+  });
+
+  it("says nothing on the normal paths (supported host, older pi, no handle)", () => {
+    const target = join(tempDir, "effective-quiet.log");
+    process.env[ENV] = target;
+    fs.writeFileSync(settingsPath(), JSON.stringify({ "test.ns": { a: 1 } }), "utf-8");
+
+    readEffectiveSettings({ getSettings: () => ({ "test.ns": { a: 2 } }) });
+    readEffectiveSettings({});
+    readEffectiveSettings();
+
+    expect(fs.existsSync(target)).toBe(false);
+  });
+});

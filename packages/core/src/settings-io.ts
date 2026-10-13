@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync, lstatSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { diag, describeError } from "./log.js";
 
 const SETTINGS_PATH = join(getAgentDir(), "settings.json");
 
@@ -47,7 +48,10 @@ function readSettings(): Record<string, unknown> {
  * `>=0.85.0` (ADR 0013 / ADR 0026), because `getSettings` is younger than that
  * floor. It also covers pi refusing the call — the handle's wrapper asserts an
  * active extension context and throws otherwise — and a host that hands back
- * something that is not an object. Anything unusable falls through to the file.
+ * something that is not an object. Anything unusable falls through to the file,
+ * and a *thrown* refusal is recorded in the log on the way: the same catch hides
+ * a call made before the runtime bound itself, whose only symptom would be a
+ * settings read that quietly cannot see project scope.
  *
  * Reads only. There is no matching write path: pi exposes no public settings
  * writer, so `saveConfig` keeps its symlink-preserving tmp+rename behaviour
@@ -66,10 +70,18 @@ export function readEffectiveSettings(pi?: unknown): Record<string, unknown> {
       if (typeof effective === "object" && effective !== null && !Array.isArray(effective)) {
         return effective as Record<string, unknown>;
       }
-    } catch {
+    } catch (err) {
       // pi asserts the extension is active before answering, so the call can
       // refuse. A settings read is never allowed to be the reason something
-      // failed, so fall through to the file.
+      // failed, so fall through to the file — but never fall through silently:
+      // the same catch also swallows the handle's "runtime not initialized"
+      // stub (a call made too early, i.e. a bug) and anything the real
+      // implementation chokes on, and every one of those looks like nothing
+      // more than a settings read that cannot see project scope.
+      diag(
+        "core",
+        `[archimedes:settings-io] getSettings() refused; falling back to settings.json: ${describeError(err)}`,
+      );
     }
   }
   return readSettings();
