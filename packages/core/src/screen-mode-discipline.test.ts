@@ -17,6 +17,15 @@ import { fileURLToPath } from "node:url";
 // glues straight onto `Tui`, so a word-anchored pattern matches nothing in the
 // tree. The patterns are also case-insensitive for the same reason — `uiTui`
 // has a capital T.
+//
+// Module-scope declarations accept an `export` prefix and an optional type
+// annotation, because those are how the binding is really written: `export let
+// sharedTui: TUI` and `const appTui: TUI = tui` hoard a renderer just as much
+// as `let sharedTui = tui` does, and a pattern that requires the declaration
+// keyword at column 0 followed immediately by `=` sees neither. A `const` with
+// no type annotation is only caught when its initializer is a renderer, which
+// is what keeps the `tuiMode` *setting* — a screen-mode string whose name also
+// contains "tui" — out of the net.
 
 interface ViolationRule {
   /** What shape of renderer hoarding this catches. */
@@ -27,8 +36,9 @@ interface ViolationRule {
 const RULES: readonly ViolationRule[] = [
   { label: "class field holding a renderer", pattern: /(private|public|readonly)\s+\w*tui\w*\s*[:=]/i },
   { label: "renderer assigned to an instance property", pattern: /\bthis\.\w*tui\w*\s*=/i },
-  { label: "module-scope mutable renderer binding", pattern: /^(let|var)\s+\w*tui\w*\b/im },
-  { label: "module-scope const bound to a renderer", pattern: /^const\s+\w*tui\w*\s*=/im },
+  { label: "module-scope mutable renderer binding", pattern: /^(export\s+)?(let|var)\s+\w*tui\w*\b/im },
+  { label: "module-scope const typed as a renderer", pattern: /^(export\s+)?const\s+\w*tui\w*\s*:\s*TUI\b/im },
+  { label: "module-scope binding initialised from a renderer", pattern: /^(export\s+)?(let|var|const)\s+\w+\s*=\s*\w*tui\w*\s*[;,]?\s*$/im },
 ];
 
 /**
@@ -147,19 +157,36 @@ describe("screen-mode discipline: never store a renderer", () => {
       "let sharedTui: TUI | undefined;",
       "var cachedTui = tui;",
       "const appTui = tui;",
+      // Re-exported bindings are the same hoarding with `export` in front —
+      // a pattern anchored on `^(let|var|const)` walks straight past them.
+      "export let sharedTui: TUI | undefined;",
+      "export var cachedTui = tui;",
+      "export const appTui = tui;",
+      "export let cachedTui;",
+      // A type annotation between the name and the initializer is how a
+      // renderer binding is actually written in TypeScript, so the shape the
+      // guard most needs to see must not be the shape it skips.
+      "const appTui: TUI = tui;",
+      "export const appTui: TUI = tui;",
+      "let currentTui: TUI = tui;",
     ];
     for (const line of offenders) {
       expect(RULES.some((r) => r.pattern.test(line)), `expected a rule to reject: ${line}`).toBe(true);
     }
 
     // And leaves honest code alone: renderers received as parameters, locals
-    // inside a function, and unrelated names that merely contain "tui".
+    // inside a function, unrelated names that merely contain "tui", and the
+    // tuiMode *setting* (a screen-mode string, not a renderer) at module
+    // scope — widening the declaration patterns must not swallow it.
     const fine = [
       "  const factory = (tui: TUI, theme: Theme) => {",
       "  const tuiMode = settings.tuiMode;",
       "  return screenMode(tui);",
       "    const tui = getRenderer();",
       "export function screenMode(tui: object): ScreenMode {",
+      "const tuiMode = settings.tuiMode;",
+      "export const tuiModes = [\"regular\", \"fullscreen\"] as const;",
+      "const tuiMode: TuiMode = readMode();",
     ];
     for (const line of fine) {
       expect(RULES.some((r) => r.pattern.test(line)), `expected no rule to reject: ${line}`).toBe(false);
