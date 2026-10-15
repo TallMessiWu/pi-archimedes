@@ -10,7 +10,7 @@ Tool `subagent`: delegate a task — or a batch of them — to child pi processe
 
 ## Dispatch
 
-`packages/subagent/src/index.ts` accepts `task` (single) or `tasks[]` (parallel), with optional `agent`, `model`, and `cwd` per task. A call resolves when every run has settled — the `async` field in `SUBAGENT_PARAMS_SCHEMA` is declared but not honoured, so nothing is fire-and-forget (see `packages/subagent/README.md`). Parallel tasks all start at once: `executeParallel()` maps `Promise.all` over them (`packages/subagent/src/execute.ts`), with one progress slot per task from the start so the rows stay stacked in task order.
+`packages/subagent/src/index.ts` accepts `task` (single) or `tasks[]` (parallel), with optional `agent`, `model`, and `cwd` per task. A call resolves when every run has settled — there is no async mode, and nothing is fire-and-forget: the `async` parameter was deleted in #114 because the schema declared it and no code read it (see `packages/subagent/README.md`). Parallel tasks all start at once: `executeParallel()` maps `Promise.all` over them (`packages/subagent/src/execute.ts`), with one progress slot per task from the start so the rows stay stacked in task order.
 
 The child is a real pi: `spawnSubagent()` in `packages/subagent/src/spawn.ts` builds `--mode json --no-session -p` plus `--model`, `--thinking`, `--tools`, `--no-mcp` and `--system-prompt` as applicable, and always appends `--exclude-tools subagent` so a child cannot spawn children. Its system prompt is passed inline as `--system-prompt`.
 

@@ -77,7 +77,6 @@ export function registerSubagent(pi: ExtensionAPI): void {
         tasks?: Array<{ agent?: string; task: string; count?: number; model?: string; cwd?: string }>;
         model?: string;
         cwd?: string;
-        async?: boolean;
       },
       signal: AbortSignal | undefined,
       onUpdate: ((update: SubagentToolResult) => void) | undefined,

@@ -13,7 +13,7 @@ The orchestrator package (`pi-archimedes`) that depends on all component package
 _Avoid_: Umbrella, root, orchestrator package
 
 **Subagent**:
-A child pi process dispatched by the main agent to handle a delegated task. Can be sync (blocking until completion) or async (fire-and-forget). Communicates via IPC.
+A child pi process dispatched by the main agent to handle a delegated task. The run blocks until the child finishes — a call resolves only once every run it started has settled. Communicates via IPC.
 _Avoid_: Child agent, worker, spawned agent
 
 **Run outcome**:

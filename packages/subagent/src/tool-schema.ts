@@ -25,9 +25,6 @@ export const SUBAGENT_PARAMS_SCHEMA = Type.Object({
   model: Type.Optional(Type.String({
     description: "Model override for the subagent",
   })),
-  async: Type.Optional(Type.Boolean({
-    description: "Run asynchronously (fire-and-forget)",
-  })),
   cwd: Type.Optional(Type.String({
     description: "Working directory for the subagent",
   })),
