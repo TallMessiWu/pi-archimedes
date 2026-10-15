@@ -113,11 +113,18 @@ const INDEX_SOURCE = readFileSync(fileURLToPath(new URL("./index.ts", import.met
  * is a real read of `agent`) and only its braces count inside the template — and
  * regex literals.
  *
- * Deliberately narrow, and loud where it stops: the regex state does not model
- * `[…]` character classes, and a `/` after a `)` or a `}` is read as division.
- * Either would have to appear inside the parallel branch to matter, and the
- * failure it would cause is an unbalanced brace, which `closingBrace()` throws on
- * instead of letting a quietly narrowed window pass.
+ * Deliberately narrow, and loud only where it can tell it has stopped: a backslash
+ * before a newline inside a quoted string or a regex throws, because a line
+ * continuation would close the literal early and read its tail as code, and that
+ * mis-scan still balances its braces. (A template needs no such rule: it may hold
+ * newlines, so its own scan carries on past them.) Two edges are not caught, and
+ * both would have to appear inside the parallel branch to matter. A `[…]` character
+ * class is not modelled, so `[{]` or a quote inside one blanks cleanly instead of
+ * throwing. A `/` after `)` is read as division — `({a: 1}) / 2` is fine — but a `/`
+ * straight after a `}` opens a regex state that runs to the next `/`, blanking the
+ * real `t.<field>` reads between them while the braces still balance. So the guard
+ * still fails, but it can name the wrong cause; that is the honest limit, and a real
+ * JavaScript lexer is the wrong trade for a guard test.
  */
 function blankNonCode(source: string): string {
   // Reads always come from `source` and writes always go to `out`: blanking in
@@ -157,14 +164,29 @@ function blankNonCode(source: string): string {
       case "double":
       case "regex": {
         const quote = mode === "single" ? "'" : mode === "double" ? '"' : "/";
-        // A backslash escapes the next character inside a string, a template and a
-        // regex alike, so the pair is consumed together: neither `"\\"` nor `/\//`
-        // ends where a scan that only looked at the current character would say.
-        if (ch === "\\" && next !== undefined && next !== "\n") {
-          out[i] = " ";
-          out[i + 1] = " ";
-          i += 2;
-          continue;
+        if (ch === "\\") {
+          // A backslash immediately before a newline is a line continuation: the
+          // literal carries on over a newline that no quoted string or regex can
+          // legally contain. Reading it as the end of the literal would close the
+          // string a line early and then treat its remaining text as code — the one
+          // mis-scan this scanner could never see, because it still finds balanced
+          // braces. So it is an error rather than a guess. (A template needs no such
+          // rule below: a template may hold newlines, continuation or not.)
+          if (next === "\n") {
+            throw new Error(
+              `blankNonCode(): a backslash-newline line continuation inside a ${quote}-quoted literal in index.ts — ` +
+                "this scanner does not support it: the literal would be closed early and its tail read as code",
+            );
+          }
+          // A backslash escapes the next character inside a string, a template and a
+          // regex alike, so the pair is consumed together: neither `"\\"` nor `/\//`
+          // ends where a scan that only looked at the current character would say.
+          if (next !== undefined) {
+            out[i] = " ";
+            out[i + 1] = " ";
+            i += 2;
+            continue;
+          }
         }
         if (ch === quote) {
           out[i] = " ";
@@ -285,11 +307,13 @@ function blankNonCode(source: string): string {
  * a regex after an operator, an opening bracket or a comma, a division after a
  * name, a digit, a closing bracket or a closing quote.
  *
- * Two known limits, both out of reach here and both landing on the loud side of
- * the failure: a `}` is not in the division set, so a `/` straight after one reads
- * as a regex, and the regex state itself does not model `[…]` classes. Either
- * would have to appear inside the parallel branch to matter, and the result is an
- * unbalanced brace, which `closingBrace()` throws on.
+ * Two known limits, both out of reach here: a `}` is not in the division set, so a
+ * `/` straight after one reads as a regex and its state runs to the next `/`, and
+ * the regex state itself does not model `[…]` classes. Either would have to appear
+ * inside the parallel branch to matter; what they cost is blanked (or shifted) text,
+ * never a fabricated field read — but a swallowed run of lines narrows the window the
+ * reads are looked for in, so the guard can fail on a true verdict with a wrong named
+ * cause. See the `blankNonCode()` header.
  */
 function startsRegex(text: string, i: number): boolean {
   for (let j = i - 1; j >= 0; j--) {
@@ -377,10 +401,15 @@ function readTaskFields(): string[] {
   const end = closingBrace(INDEX_CODE, INDEX_CODE.indexOf("{", start));
   const body = INDEX_CODE.slice(start, end + 1);
   const fields = group1(body, /(?:^|[^\w$.])t\.([A-Za-z_$][\w$]*)/g);
-  // A renamed loop variable would parse to nothing, and an empty list compared
-  // against the schema's list fails for the wrong reason. Say which premise broke.
+  // An empty list compared against the schema's list would fail for the wrong
+  // reason, so name the premises this rests on: the loop variable's name, and the
+  // scan window this read is scoped to (see `blankNonCode()` — a division-shaped
+  // token can narrow that window without unbalancing anything).
   if (fields.length === 0) {
-    throw new Error("No `t.<field>` reads found in the parallel-mode branch — the loop variable was renamed?");
+    throw new Error(
+      "No `t.<field>` reads found in the parallel-mode branch — the loop variable was renamed, " +
+        "or the blanked view's scan window narrowed before reaching them (see blankNonCode())",
+    );
   }
   return fields;
 }
