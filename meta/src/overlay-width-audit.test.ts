@@ -60,8 +60,18 @@ const TYPED_VALUE = "検証モデル名";
  * that renames the value cannot leave the crowding check below pointing at a
  * string nothing draws any more. A horizontally scrolled field drops these
  * columns first, which is what the check reads them for.
+ *
+ * The `/` is asserted rather than assumed: `slice(0, -1)` — what `indexOf` returns
+ * when it finds nothing — would silently cut only the last character, so the head
+ * would still be found on screen and the crowding tripwire below would weaken
+ * instead of failing. A leading `/` is refused for the same reason: it makes the
+ * head empty, and an empty string is found in every frame.
  */
-const SEEDED_HEAD = SEEDED_VALUE.slice(0, SEEDED_VALUE.indexOf("/"));
+const SEPARATOR = SEEDED_VALUE.indexOf("/");
+if (SEPARATOR <= 0) {
+  throw new Error("`SEEDED_VALUE` needs a non-empty first path segment — the head below is it");
+}
+const SEEDED_HEAD = SEEDED_VALUE.slice(0, SEPARATOR);
 
 const ITEMS: SettingItem[] = [
   {

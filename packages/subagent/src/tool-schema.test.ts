@@ -81,8 +81,253 @@ function declaredTaskItemParams(): string[] {
 // `log-discipline.test.ts` uses — because there is no runtime reflection over
 // erased TS types, and a hand-written list of the names would be the thing the
 // guard exists to catch.
+//
+// The precedent stops at the technique, though, and the difference is what makes
+// the two helpers below more than a grep: `log-discipline.test.ts` only greps
+// whole lines for a call shape, so a match on any line is the fact it wants,
+// while this file reads *structure* — a member list scoped by a type literal, a
+// field list scoped by one brace-balanced branch. Scoping to a region is where a
+// naive regex lies: it matches names inside comments and inside template strings
+// as happily as inside code, and it ends a region wherever a marker string
+// happens to sit. So the code view is built before anything is matched:
+// comments and string/template interiors blanked, and the branch read to its
+// matching brace. Both are load-bearing here and neither would be needed for a
+// line-level grep.
 
 const INDEX_SOURCE = readFileSync(fileURLToPath(new URL("./index.ts", import.meta.url)), "utf8");
+
+/**
+ * `INDEX_SOURCE` with every comment and every string / template / regex
+ * *interior* replaced by spaces. Newlines are kept, so an offset in the result
+ * is the same offset in the file.
+ *
+ * Why not `text.replace(...)` for the comments followed by a brace count:
+ * `index.ts` contains `n.replace(/"/g, '')`, where one `/` opens a regex literal
+ * and a `"` sits *inside* it. Stripping comments and quotes without having read
+ * the string and regex states that far takes that `"` for the start of a string
+ * and blanks the real statement after it — dropping a genuine `t.<field>` read
+ * and reporting a phantom that was never declared. A guard that lies about a real
+ * read is worse than the phantom it guards, so the scan tracks each of them: line
+ * comments, block comments, single- and double-quoted strings, template literals —
+ * where `${…}` re-enters code, so an interpolation is kept (`` `"${t.agent}"` ``
+ * is a real read of `agent`) and only its braces count inside the template — and
+ * regex literals.
+ *
+ * Deliberately narrow, and loud where it stops: the regex state does not model
+ * `[…]` character classes, and a `/` after a `)` or a `}` is read as division.
+ * Either would have to appear inside the parallel branch to matter, and the
+ * failure it would cause is an unbalanced brace, which `closingBrace()` throws on
+ * instead of letting a quietly narrowed window pass.
+ */
+function blankNonCode(source: string): string {
+  // Reads always come from `source` and writes always go to `out`: blanking in
+  // place would erase the very backslash the escape rule below depends on, and the
+  // next character would then look unescaped and end the string early.
+  const out = source.split("");
+  let mode: "code" | "line" | "block" | "single" | "double" | "template" | "regex" = "code";
+  /** The brace depth each open `${` was seen at; a `}` there closes the interpolation, not a block. */
+  const interpolations: number[] = [];
+  let depth = 0;
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i] as string;
+    const next = source[i + 1];
+    switch (mode) {
+      case "line":
+        if (ch === "\n") {
+          mode = "code";
+          i++;
+          continue;
+        }
+        out[i] = " ";
+        i++;
+        continue;
+      case "block":
+        if (ch === "*" && next === "/") {
+          out[i] = " ";
+          out[i + 1] = " ";
+          i += 2;
+          mode = "code";
+          continue;
+        }
+        if (ch !== "\n") out[i] = " ";
+        i++;
+        continue;
+      case "single":
+      case "double":
+      case "regex": {
+        const quote = mode === "single" ? "'" : mode === "double" ? '"' : "/";
+        // A backslash escapes the next character inside a string, a template and a
+        // regex alike, so the pair is consumed together: neither `"\\"` nor `/\//`
+        // ends where a scan that only looked at the current character would say.
+        if (ch === "\\" && next !== undefined && next !== "\n") {
+          out[i] = " ";
+          out[i + 1] = " ";
+          i += 2;
+          continue;
+        }
+        if (ch === quote) {
+          out[i] = " ";
+          i++;
+          mode = "code";
+          continue;
+        }
+        // A newline cannot legally sit inside these three: end the literal there,
+        // so one unbalanced quote cannot swallow the rest of the file and hide the
+        // branch's reads entirely.
+        if (ch === "\n") {
+          mode = "code";
+          i++;
+          continue;
+        }
+        out[i] = " ";
+        i++;
+        continue;
+      }
+      case "template": {
+        if (ch === "\\" && next !== undefined && next !== "\n") {
+          out[i] = " ";
+          out[i + 1] = " ";
+          i += 2;
+          continue;
+        }
+        if (ch === "`") {
+          out[i] = " ";
+          i++;
+          mode = "code";
+          continue;
+        }
+        if (ch === "$" && next === "{") {
+          out[i] = " ";
+          out[i + 1] = " ";
+          i += 2;
+          interpolations.push(depth);
+          mode = "code";
+          continue;
+        }
+        if (ch !== "\n") out[i] = " ";
+        i++;
+        continue;
+      }
+      case "code": {
+        if (ch === "/" && next === "/") {
+          out[i] = " ";
+          i++;
+          mode = "line";
+          continue;
+        }
+        if (ch === "/" && next === "*") {
+          out[i] = " ";
+          out[i + 1] = " ";
+          i += 2;
+          mode = "block";
+          continue;
+        }
+        if (ch === "'") {
+          out[i] = " ";
+          i++;
+          mode = "single";
+          continue;
+        }
+        if (ch === '"') {
+          out[i] = " ";
+          i++;
+          mode = "double";
+          continue;
+        }
+        if (ch === "`") {
+          out[i] = " ";
+          i++;
+          mode = "template";
+          continue;
+        }
+        // The lookback reads `out`, the part already scanned, so a `/` whose
+        // division-operand was a blanked string reads as what it is.
+        // The lookback deliberately reads `source` and not `out`: the quote or the
+        // backtick that just closed a literal is exactly the signal that this `/`
+        // divides it, and a blanked view would have hidden that.
+        if (ch === "/" && startsRegex(source, i)) {
+          out[i] = " ";
+          i++;
+          mode = "regex";
+          continue;
+        }
+        if (ch === "{") {
+          depth++;
+          i++;
+          continue;
+        }
+        if (ch === "}") {
+          // This `}` closes an interpolation rather than a block, so the scan goes
+          // back into the template instead of ending the window early.
+          if (interpolations.length > 0 && interpolations[interpolations.length - 1] === depth) {
+            interpolations.pop();
+            out[i] = " ";
+            i++;
+            mode = "template";
+            continue;
+          }
+          depth--;
+          i++;
+          continue;
+        }
+        i++;
+        continue;
+      }
+    }
+  }
+  return out.join("");
+}
+
+/**
+ * Whether the `/` at `i` opens a regex literal instead of dividing. A regex can
+ * only appear where a value is expected, so the answer is whatever precedes it:
+ * a regex after an operator, an opening bracket or a comma, a division after a
+ * name, a digit, a closing bracket or a closing quote.
+ *
+ * Two known limits, both out of reach here and both landing on the loud side of
+ * the failure: a `}` is not in the division set, so a `/` straight after one reads
+ * as a regex, and the regex state itself does not model `[…]` classes. Either
+ * would have to appear inside the parallel branch to matter, and the result is an
+ * unbalanced brace, which `closingBrace()` throws on.
+ */
+function startsRegex(text: string, i: number): boolean {
+  for (let j = i - 1; j >= 0; j--) {
+    const prev = text[j];
+    if (prev === undefined || prev === " " || prev === "\t" || prev === "\n") continue;
+    return !/[\w$)'"`\]]/.test(prev);
+  }
+  return true;
+}
+
+/**
+ * Index of the `}` closing the `{` at `open`, measured on a comment/string-blanked
+ * view so a brace inside a comment or a string cannot end the window early. Throws
+ * rather than returning -1: an unclosed branch means the scan and the file disagree
+ * about a literal, and the honest answer is "this parser stopped understanding".
+ */
+function closingBrace(code: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === "{") depth++;
+    else if (code[i] === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  throw new Error(
+    "The parallel-mode branch of index.ts has no matching `}` in the comment/string-blanked view — " +
+      "either the branch was rewritten or this scanner mis-reads a string, template or regex inside it",
+  );
+}
+
+/**
+ * `INDEX_SOURCE` with comments and literal interiors blanked (see
+ * `blankNonCode`). Both parsers below read this and never the raw text: matching
+ * raw text is what let a name merely *mentioned in a comment* count as a declared
+ * or read field — the same false statement #114 is about, in the other direction.
+ */
+const INDEX_CODE = blankNonCode(INDEX_SOURCE);
 
 /** Group 1 of every match of `re` in `text`, narrowing away the undefined case. */
 function group1(text: string, re: RegExp): string[] {
@@ -96,11 +341,13 @@ function group1(text: string, re: RegExp): string[] {
 
 /**
  * Member names of the inline `tasks?: Array<{…}>` type on `execute`.
- * Handles a flat object literal only — which is what the type is — and says so
- * rather than mis-parsing if a nested object type ever appears inside it.
+ * Read off the blanked view, so a member mentioned in a comment above the type is
+ * not counted as declared. The window ends at the first `}>`, so it needs the
+ * type to stay a flat object literal — which it is — and it says so rather than
+ * mis-parsing if a nested object type ever appears inside it.
  */
 function declaredTaskItemTsType(): string[] {
-  const match = INDEX_SOURCE.match(/tasks\?:\s*Array<\{([\s\S]*?)\}>/);
+  const match = INDEX_CODE.match(/tasks\?:\s*Array<\{([\s\S]*?)\}>/);
   const members = match?.[1];
   if (!members) throw new Error("Could not find the inline `tasks?: Array<{…}>` type in index.ts");
   if (members.includes("{")) {
@@ -111,16 +358,24 @@ function declaredTaskItemTsType(): string[] {
 
 /**
  * The task fields `execute` reads, in the parallel branch: every `t.<name>`
- * inside `if (params.tasks …) { … }`, up to the `// Single mode` marker. Scoped
- * deliberately — `index.ts` binds `t` to other things elsewhere (`getAllTools`
- * maps `(t) => t.name`), and those are not task fields.
+ * between `if (params.tasks …) {` and the `}` that closes it. Scoped deliberately
+ * — `index.ts` binds `t` to other things elsewhere (`getAllTools` maps
+ * `(t) => t.name`), and those are not task fields — and scoped by *braces*, not by
+ * the first comment that looks like a landmark: the old window ended at the
+ * `// Single mode` marker, so it both swallowed the comments inside the branch
+ * (where a `t.count` in prose counted as a read) and would stop early at that
+ * string anywhere it appeared. Blank-and-balance is what makes "read" mean read in
+ * code.
  */
 function readTaskFields(): string[] {
-  const start = INDEX_SOURCE.indexOf("if (params.tasks && params.tasks.length > 0) {");
+  // The anchor is the same in the raw file and in the blanked view — the scan
+  // replaces characters with spaces, it never deletes one — so the offsets below
+  // line up with what a reader sees in `index.ts`.
+  const anchor = "if (params.tasks && params.tasks.length > 0";
+  const start = INDEX_CODE.indexOf(anchor);
   if (start < 0) throw new Error("Could not find the parallel-mode branch in index.ts");
-  const end = INDEX_SOURCE.indexOf("// Single mode", start);
-  if (end < 0) throw new Error("Could not find the end of the parallel-mode branch in index.ts");
-  const body = INDEX_SOURCE.slice(start, end);
+  const end = closingBrace(INDEX_CODE, INDEX_CODE.indexOf("{", start));
+  const body = INDEX_CODE.slice(start, end + 1);
   const fields = group1(body, /(?:^|[^\w$.])t\.([A-Za-z_$][\w$]*)/g);
   // A renamed loop variable would parse to nothing, and an empty list compared
   // against the schema's list fails for the wrong reason. Say which premise broke.

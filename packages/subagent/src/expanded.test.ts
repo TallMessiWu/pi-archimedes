@@ -218,13 +218,13 @@ describe("expanded view: a multi-line error is readable in full (issue #112)", (
   });
 
   // Both streaming builders choose this branch on `status === "completed" ||
-  // outcome`, and then hand `progress.error` to `buildOutcomeLine`, which reads
-  // `error` before `outcome`. `stream.ts` only ever sets `error` for a failed run
-  // today, but `progress` is also data read back out of a persisted session, and
-  // the branch's own contract is "state or outcome, plus whatever error came with
-  // it" — so the error has to be revealed here too. Until now it was the one place
-  // the finished view's fix had not reached: same run, full error in
-  // `buildExpandedText`, one line here.
+  // outcome`, and still pass `progress.error` down, where `outcomeSegments` reads
+  // `error` before `outcome` — mirroring `buildOutcomeLine` (`format.ts:101`).
+  // `stream.ts` only ever sets `error` for a failed run today, but `progress` is
+  // also data read back out of a persisted session, and the branch's own contract
+  // is "state or outcome, plus whatever error came with it" — so the error has to
+  // be revealed here too. Until now it was the one place the finished view's fix
+  // had not reached: same run, full error in `buildExpandedText`, one line here.
   it("shows every line of a *completed* streaming run's error, not just a failed one's", () => {
     const rows = new CapturingRowBlock();
     renderProgressExpanded(rows, makeProgress({ status: "completed" }), theme);
@@ -334,8 +334,9 @@ describe("expanded view: a multi-line error is readable in full (issue #112)", (
   });
 
   it("still lets the error win over the outcome, even when the error is multi-line", () => {
-    // Pinned as-is, not decided here: `buildOutcomeLine` reads `data.error`
-    // first, so an error and an outcome together report the error. Both halves of
+    // Pinned as-is, not decided here: `outcomeSegments` reads `data.error`
+    // before the outcome — the same precedence `buildOutcomeLine` gives it — so an
+    // error and an outcome together report the error. Both halves of
     // the text have to survive that precedence now that the error is a block.
     const out = drawnText(
       buildExpandedText(failedResult({ outcome: "truncated", finalOutput: "partial" }), undefined, theme),

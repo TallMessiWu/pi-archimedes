@@ -60,8 +60,8 @@ function outcomeSegments(
   theme: Theme,
   // The segment to draw when there is nothing to report, rendered by the caller
   // rather than decided here, because the three call sites do not agree on it:
-  // the finished view says `✗ Failed` (a result reporting neither an outcome nor
-  // an error has no success to claim), the two streaming views say `✓ Done` (a
+  // the finished view says `✗ Failed` (an `outcome` this build cannot name is not
+  // a success this build may claim), the two streaming views say `✓ Done` (a
   // run that reports a terminal *state* with no outcome is reporting that it
   // finished, and `outcome` is optional on `SubagentProgress` — sessions
   // persisted before #103 / 8cf0d12 added the field carry a completed status and
@@ -157,8 +157,12 @@ export function buildExpandedText(
   if (result.error || result.outcome || result.exitCode === 0) {
     lines.push(row(""));
     if (result.outcome || result.error) {
-      // A result that never settled has no success to claim, so this site's
-      // fallback is Failed; the two streaming builders pass ✓ Done (see
+      // The fallback covers exactly one case here: an `outcome` this build cannot
+      // name, which leaves `buildOutcomeLine` with nothing to return. It is
+      // Failed, because a run whose ending this code cannot read is not a success
+      // this code may claim. The never-settled legacy shape — no outcome, no
+      // error, a non-zero exit — is not this fallback's: the `else` below prints
+      // it. The two streaming builders pass ✓ Done instead (see
       // `outcomeSegments`' third parameter for why it is not decided here).
       lines.push(
         ...outcomeSegments(
@@ -239,11 +243,11 @@ export function renderProgressExpanded(
     lines.push(row(renderToolCallLine("running", progress.currentTool, suffix, theme)));
   }
 
-  // Status at bottom. The branch is chosen by the run's terminal *state*, but it
-  // still hands `progress.error` to `buildOutcomeLine`, and that helper reads
-  // `error` before `outcome` — so an error arriving on a progress that also
-  // reports a state or an outcome is drawn here, and it deserves the same
-  // treatment the `failed` branch below already gave its own (#112).
+  // Status at bottom. The branch is chosen by the run's terminal *state*, but the
+  // error the progress carries is read first by `outcomeSegments`, mirroring
+  // `buildOutcomeLine`'s precedence (`format.ts:101`) — so an error arriving on a
+  // progress that also reports a state is drawn here, and it gets the same
+  // treatment the `failed` branch below gives its own (#112).
   if (progress.status === "completed" || progress.outcome) {
     lines.push(row(""));
     // `✓ Done` is this caller's fallback, passed in rather than baked into
@@ -324,11 +328,11 @@ export function buildProgressExpandedText(
     lines.push(row(line));
   }
 
-  // Status at bottom. The branch is chosen by the run's terminal *state*, but it
-  // still hands `progress.error` to `buildOutcomeLine`, and that helper reads
-  // `error` before `outcome` — so an error arriving on a progress that also
-  // reports a state or an outcome is drawn here, and it deserves the same
-  // treatment the `failed` branch below already gave its own (#112).
+  // Status at bottom. The branch is chosen by the run's terminal *state*, but the
+  // error the progress carries is read first by `outcomeSegments`, mirroring
+  // `buildOutcomeLine`'s precedence (`format.ts:101`) — so an error arriving on a
+  // progress that also reports a state is drawn here, and it gets the same
+  // treatment the `failed` branch below gives its own (#112).
   if (progress.status === "completed" || progress.outcome) {
     lines.push(row(""));
     // `✓ Done` is this caller's fallback, passed in rather than baked into
