@@ -113,6 +113,27 @@ function drawnIncludes(raw: string[], needle: string): boolean {
   return raw.some((l) => stripTerminalSequences(l).includes(needle));
 }
 
+/**
+ * The raw line of the row that draws `needle`, or undefined unless exactly one
+ * row draws it. Strips terminal sequences and the border glyphs the way
+ * `searchRow()` does to *locate* the row, then hands back the untouched line so
+ * a caller can still look inside it for the zero-width `CURSOR_MARKER` — which
+ * the strip would remove.
+ */
+function drawnLine(raw: string[], needle: string): string | undefined {
+  const rows = raw.filter((l) => stripTerminalSequences(l).replace(/[│┌└┐┘─]/g, "").includes(needle));
+  return rows.length === 1 ? rows[0] : undefined;
+}
+
+/**
+ * The most drawn columns that may follow the marker on a *crowded* prompt row.
+ * Measured at width 40: 3 — the cell the fake cursor occupies, the one padding
+ * space that still lands on the frame, and the right border cell. One column of
+ * slack, so the tripwire below fires on a fixture that stops crowding the row
+ * rather than on a border that grew by a cell.
+ */
+const MARKER_EDGE_ROOM = 4;
+
 function makeManager() {
   return createSettingsManager({
     items: ITEMS.map((i) => ({ ...i })),
@@ -209,6 +230,36 @@ describe("overlay surfaces frame-width audit", () => {
       for (const ch of "検証モデル名") prompting.handleInput(ch);
       capture("settings:prompt", prompting.render(frameWidth), (raw) => {
         if (!drawnIncludes(raw, "検証")) return "prompt field does not show the typed wide value";
+        // #100: the cursor marker survives a full prompt row. `CURSOR_MARKER` is
+        // zero width, so on a row whose value already fills the frame it is the
+        // one thing that costs nothing to keep and everything to lose — the old
+        // `.length`-based padding counted it as drawn columns and the truncation
+        // that followed cut it off the tail, leaving the user a value, no cursor
+        // and no clue why. The search rows above already carry the sibling
+        // assertion; this is the prompt row's.
+        //
+        // It is bound to the row that draws the value, not to the frame: while a
+        // field is open the search row is not drawn, but a whole-frame `.some()`
+        // would still be satisfied by a marker that migrated onto any other row,
+        // which is exactly the regression shape this guards. `drawnLine` refuses
+        // an ambiguous match for the same reason.
+        const row = drawnLine(raw, "検証");
+        if (row === undefined) return "the typed value is not drawn on exactly one row";
+        if (!row.includes(CURSOR_MARKER)) return "cursor marker missing from the prompt value row";
+        // Tripwire against a decorative guard: the crowded shape is what the
+        // assertion is for, and it only exists at the narrowest frame, where the
+        // seeded value plus the typed value (37 columns) exceed the 34 the field
+        // is handed, so pi-tui's `Input` scrolls the row and the head of the
+        // value ("anthropic") is not even drawn. Measured there: the marker lands
+        // at drawn column 37 of 40 with 3 columns after it. If the fixture ever
+        // stops crowding the row, say so loudly rather than letting the guard go
+        // green on an easy case.
+        if (frameWidth === FRAME_WIDTHS[0]) {
+          const at = row.indexOf(CURSOR_MARKER);
+          const room = tuiVisibleWidth(row.slice(at + CURSOR_MARKER.length));
+          if (room > MARKER_EDGE_ROOM)
+            return `prompt value row is not crowded at the narrowest frame: ${room} columns follow the marker`;
+        }
         return null;
       });
 
