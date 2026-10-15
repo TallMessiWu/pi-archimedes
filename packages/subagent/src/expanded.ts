@@ -10,9 +10,14 @@ type Theme = { fg: (token: string, text: string) => string; bold: (text: string)
 // one line and fills the frame; a **block** (the stats line, the task text, the
 // tool-call history, the output, the lines of an error after the first) keeps
 // wrapping, because the expanded view is where all of it is meant to be readable
-// (ADR 0020). The stats line is a block and not a row
-// because nothing else repeats its numbers: cut at the frame, its tail — tokens,
-// duration, cost — would simply be gone on a narrow terminal.
+// (issue #112; its counterpart — the collapsed view cutting at the first line — is
+// pinned in `tool-row.width-audit.test.ts`). The stats line is a block and not a
+// row so the view reads on its own, without the reader collapsing back to the row
+// to get the numbers back. They do live elsewhere too — `compact.ts` builds the
+// identical `buildStatsLine`, `formatParallelResults` puts tools / tokens /
+// seconds in the model-facing content, and `usage` reaches pi's `/session` — but
+// every row is cut at the frame, so the tail of the stats (tokens, duration,
+// cost) is exactly what a narrow terminal would drop from this view.
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -28,18 +33,21 @@ function formatToolCall(call: SubagentToolCall | string, theme: Theme): string {
   return renderToolCallLine(status, call.name, suffix, theme);
 }
 
-// The bottom row of a finished view. The *Run outcome* wins over the done/failed
+// The bottom of an expanded view. The *Run outcome* wins over the done/failed
 // pair: a truncated answer is not a failed run, and labelling it "✗ Failed" is
 // how a useful answer gets thrown away by whoever reads it.
 //
-// An error is stderr, and stderr arrives with newlines in it. As one `row` the
-// view could only ever show its first line — `truncateRow` treats a newline as a
-// hard boundary (see `row-block.ts`), which is right for the collapsed view (the
-// three-rows-per-agent shape is pinned in `tool-row.width-audit.test.ts`) and
-// wrong here: the expanded view is where everything is meant to be readable
-// (ADR 0020), and a stack trace's last line is usually the informative one. So
-// the first line stays the row it was, and the lines after it are handed over as
-// one `block` — this repo's existing mechanism for "read this in full".
+// An error is often stderr or a thrown Error's message — the second kind never
+// touched a stream (`dispatch.ts`'s `buildFailedResult` carries `err.message`, and
+// `stream.ts` synthesises strings like "subagent failed with exit code N"). Either
+// way it arrives with newlines in it, and as one `row` the view could only ever
+// show its first line: `truncateRow` treats a newline as a hard boundary (see
+// `row-block.ts`), which is right for the collapsed view (the three-rows-per-agent
+// shape is pinned in `tool-row.width-audit.test.ts`) and wrong here: the expanded
+// view is where everything is meant to be readable (issue #112), and a stack
+// trace's last line is usually the informative one. So the first line stays the
+// row it was, and the lines after it are handed over as one `block` — this repo's
+// existing mechanism for "read this in full".
 //
 // The raw error is split *before* anything is coloured, and every line is
 // coloured on its own. `theme.fg("error", "✗ " + error)` wraps the whole
@@ -50,24 +58,42 @@ function formatToolCall(call: SubagentToolCall | string, theme: Theme): string {
 function outcomeSegments(
   data: { outcome?: RunOutcome | undefined; error: string | undefined },
   theme: Theme,
-  fallback: { failed: string },
+  // The segment to draw when there is nothing to report, rendered by the caller
+  // rather than decided here, because the three call sites do not agree on it:
+  // the finished view says `✗ Failed` (a result reporting neither an outcome nor
+  // an error has no success to claim), the two streaming views say `✓ Done` (a
+  // run that reports a terminal *state* with no outcome is reporting that it
+  // finished, and `outcome` is optional on `SubagentProgress` — sessions
+  // persisted before #103 / 8cf0d12 added the field carry a completed status and
+  // no outcome at all). Baking either answer into the helper would rewrite the
+  // other site's bottom row.
+  fallback: RowSegment,
 ): RowSegment[] {
   // Same precedence as `buildOutcomeLine`: `error` is read first, so a run that
   // carries both reports the error and not the outcome. Pinned in
   // `expanded.test.ts` rather than re-decided here.
   if (data.error) {
-    const [head, ...tail] = data.error.split("\n");
+    // `/\r\n|\r|\n/`, not `"\n"`: `stream.ts` reads stderr as
+    // `Buffer.concat(...).toString("utf-8").trim()` with no newline
+    // normalisation, so a Windows child's `\r\n` arrives intact. pi-tui's
+    // `wrapTextWithAnsi` splits on all three endings but `truncateRow` splits on
+    // `"\n"`, so a `\r` left inside a row would be *drawn*, and a terminal that
+    // honours a bare CR repaints the row from column 0.
+    const [head, ...tail] = data.error.split(/\r\n|\r|\n/);
     const segments: RowSegment[] = [row(theme.fg("error", "✗ " + head))];
-    // stderr normally ends in a newline, so a tail of nothing but blanks is the
-    // common case; opening a block for it would add a blank row under every
-    // failed run.
+    // A tail of nothing but blanks gets no block: a synthesised error, or any
+    // producer that does not `trim()` its stderr, can end in a newline, and
+    // opening a block for that would add a blank row under every failed run.
     if (tail.some((line) => line.trim() !== "")) {
       segments.push(block(tail.map((line) => (line ? theme.fg("error", line) : "")).join("\n")));
     }
     return segments;
   }
   const line = buildOutcomeLine({ outcome: data.outcome, error: undefined }, theme);
-  return [row(line ?? theme.fg("error", "✗ " + fallback.failed))];
+  // The outcome vocabulary stays `buildOutcomeLine`'s and this helper still owns
+  // the row decision; only "nothing to report" hands back the segment the caller
+  // rendered for itself.
+  return [line === undefined ? fallback : row(line)];
 }
 
 // ── Expanded completed result ───────────────────────────────────────────────
@@ -94,9 +120,9 @@ export function buildExpandedText(
   }, theme);
   const statsParts = [modelLabel, statsLine].filter(Boolean);
   if (statsParts.length > 0) {
-    // A block, not a row: this is the only place the run's numbers appear, and
-    // the expanded view is where they are meant to be readable however narrow
-    // the frame is (ADR 0020).
+    // A block, not a row: the expanded view has to read on its own, so the
+    // numbers cannot depend on the reader collapsing the row to get them back
+    // however narrow the frame is.
     lines.push(block(statsParts.join(" ")));
   }
 
@@ -119,6 +145,11 @@ export function buildExpandedText(
   const outputText = progress?.output ?? result.finalOutput;
   if (outputText) {
     lines.push(row(""));
+    // A block, uncapped: ADR 0020 is the precedent that this package does not cap
+    // output where the reader has no other source for it. Read it precisely — ADR
+    // 0020 governs the *tool-result content* the model reads, not this view — and
+    // the same reasoning carries over: the answer shown here is the child's, and
+    // nothing else spells it out for whoever is reading the transcript.
     lines.push(block(outputText));
   }
 
@@ -126,7 +157,16 @@ export function buildExpandedText(
   if (result.error || result.outcome || result.exitCode === 0) {
     lines.push(row(""));
     if (result.outcome || result.error) {
-      lines.push(...outcomeSegments({ outcome: result.outcome, error: result.error }, theme, { failed: "Failed" }));
+      // A result that never settled has no success to claim, so this site's
+      // fallback is Failed; the two streaming builders pass ✓ Done (see
+      // `outcomeSegments`' third parameter for why it is not decided here).
+      lines.push(
+        ...outcomeSegments(
+          { outcome: result.outcome, error: result.error },
+          theme,
+          row(theme.fg("error", "✗ Failed")),
+        ),
+      );
     } else {
       lines.push(row(theme.fg("success", "✓ Done")));
     }
@@ -199,14 +239,29 @@ export function renderProgressExpanded(
     lines.push(row(renderToolCallLine("running", progress.currentTool, suffix, theme)));
   }
 
-  // Status at bottom
+  // Status at bottom. The branch is chosen by the run's terminal *state*, but it
+  // still hands `progress.error` to `buildOutcomeLine`, and that helper reads
+  // `error` before `outcome` — so an error arriving on a progress that also
+  // reports a state or an outcome is drawn here, and it deserves the same
+  // treatment the `failed` branch below already gave its own (#112).
   if (progress.status === "completed" || progress.outcome) {
     lines.push(row(""));
-    const outcomeLine = buildOutcomeLine({ outcome: progress.outcome, error: progress.error }, theme);
-    lines.push(row(outcomeLine ?? theme.fg("success", "✓ Done")));
+    // `✓ Done` is this caller's fallback, passed in rather than baked into
+    // `outcomeSegments`: `outcome` is optional on `SubagentProgress`, so a run
+    // that reports a state and nothing else lands on the empty case, and a
+    // helper-wide `✗ Failed` there would relabel a finished run a broken one.
+    lines.push(...outcomeSegments(
+      { outcome: progress.outcome, error: progress.error },
+      theme,
+      row(theme.fg("success", "✓ Done")),
+    ));
   } else if (progress.status === "failed") {
     lines.push(row(""));
-    lines.push(...outcomeSegments({ outcome: undefined, error: progress.error }, theme, { failed: "Failed" }));
+    lines.push(...outcomeSegments(
+      { outcome: undefined, error: progress.error },
+      theme,
+      row(theme.fg("error", "✗ Failed")),
+    ));
   }
 
   rows.setSegments(lines);
@@ -269,14 +324,29 @@ export function buildProgressExpandedText(
     lines.push(row(line));
   }
 
-  // Status at bottom
+  // Status at bottom. The branch is chosen by the run's terminal *state*, but it
+  // still hands `progress.error` to `buildOutcomeLine`, and that helper reads
+  // `error` before `outcome` — so an error arriving on a progress that also
+  // reports a state or an outcome is drawn here, and it deserves the same
+  // treatment the `failed` branch below already gave its own (#112).
   if (progress.status === "completed" || progress.outcome) {
     lines.push(row(""));
-    const outcomeLine = buildOutcomeLine({ outcome: progress.outcome, error: progress.error }, theme);
-    lines.push(row(outcomeLine ?? theme.fg("success", "✓ Done")));
+    // `✓ Done` is this caller's fallback, passed in rather than baked into
+    // `outcomeSegments`: `outcome` is optional on `SubagentProgress`, so a run
+    // that reports a state and nothing else lands on the empty case, and a
+    // helper-wide `✗ Failed` there would relabel a finished run a broken one.
+    lines.push(...outcomeSegments(
+      { outcome: progress.outcome, error: progress.error },
+      theme,
+      row(theme.fg("success", "✓ Done")),
+    ));
   } else if (progress.status === "failed") {
     lines.push(row(""));
-    lines.push(...outcomeSegments({ outcome: undefined, error: progress.error }, theme, { failed: "Failed" }));
+    lines.push(...outcomeSegments(
+      { outcome: undefined, error: progress.error },
+      theme,
+      row(theme.fg("error", "✗ Failed")),
+    ));
   }
 
   return lines;

@@ -1,9 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { buildExpandedText, buildProgressExpandedText, renderExpanded, renderProgressExpanded } from "./expanded.js";
-import { renderCompactSingle } from "./compact.js";
-import { RowBlock, type RowSegment, type RowSink } from "./row-block.js";
-import type { SubagentProgress, SubagentResult } from "./types.js";
+import { RowBlock, type RowSegment } from "./row-block.js";
+import type { RunOutcome, SubagentProgress, SubagentResult } from "./types.js";
 
 // The expanded row is what the user reads after `ctrl+o`; the compact row is
 // what they see while it runs. Both have to carry the *Run outcome* vocabulary
@@ -76,8 +75,11 @@ const MULTI_LINE_ERROR = [
   "    at runChild (/home/daniel/Coding/Javascript/pi-archimedes/packages/subagent/src/spawn.ts:88:12)",
   "error: subagent exited with rc=1",
 ].join("\n");
-const FIRST_ERROR_LINE = "Command failed: pnpm -r exec -- tsc --noEmit";
-const LAST_ERROR_LINE = "error: subagent exited with rc=1";
+const ERROR_LINES = MULTI_LINE_ERROR.split("\n");
+/** Everything after the head — the part that moved from the row into the block. */
+const TAIL_ERROR_LINES = ERROR_LINES.slice(1);
+const FIRST_ERROR_LINE = ERROR_LINES[0]!;
+const LAST_ERROR_LINE = ERROR_LINES[ERROR_LINES.length - 1]!;
 
 /** `theme.fg` for real SGR bytes, so the rendered lines carry an ANSI state. */
 const ERROR_SGR = "\x1b[31m";
@@ -92,23 +94,34 @@ const sgrTheme = {
 class CapturingRowBlock extends RowBlock {
   /** Named apart from `RowBlock`'s own private field of the same name. */
   lastSegments: RowSegment[] | undefined = undefined;
+  /** A builder that handed its content over `setText` instead would land here. */
+  lastSetText: string | undefined = undefined;
 
   override setSegments(segments: RowSegment[]): void {
     this.lastSegments = segments;
     super.setSegments(segments);
   }
+
+  override setText(text: string): void {
+    this.lastSetText = text;
+    super.setText(text);
+  }
 }
 
-/** A `RowSink` that records what the compact builders hand over (see `compact.test.ts`). */
-class RecordingSink implements RowSink {
-  segments: RowSegment[] | undefined = undefined;
-  setText(_text: string): void {
-    this.segments = undefined;
-  }
-  setSegments(segments: RowSegment[]): void {
-    this.segments = segments;
-  }
+/**
+ * What the builder handed the row layer — asserted rather than assumed. Hooking
+ * `setText` and checking it here means a builder that switched to `setText`
+ * fails as a readable assertion instead of a `TypeError` on `lastSegments!`.
+ */
+function captured(rows: CapturingRowBlock): RowSegment[] {
+  expect(rows.lastSetText, "the builder handed its content over setText, so nothing below reads it")
+    .toBeUndefined();
+  expect(rows.lastSegments, "setSegments was never called, so nothing below reads the view").toBeDefined();
+  return rows.lastSegments!;
 }
+
+/** Strip this file's fake `theme.fg` markers, line by line — a block carries one per line. */
+const plainLines = (text: string): string[] => text.split("\n").map((l) => l.replace(/^\[[a-z]+\]/, ""));
 
 const content = (line: string): string => stripTerminalSequences(line).replace(/\s+$/, "");
 
@@ -147,9 +160,14 @@ describe("expanded view: a multi-line error is readable in full (issue #112)", (
   /**
    * The guarantee, asserted the same way for all three builders: the error's last
    * line is present, and a `block` carries it. `block` is this repo's mechanism
-   * for "read this in full" (ADR 0020), so the assertion is on the segment kind
-   * rather than on the joined text — a change that pushes the error back through
-   * `row()` fails here even though the joined text would still contain the line.
+   * for "read this in full" (`row-block.ts`; issue #112), so the assertion is on
+   * the segment kind rather than on the joined text — a change that pushes the
+   * error back through `row()` fails here even though the joined text would still
+   * contain the line.
+   *
+   * Order and grouping are asserted too, because a builder that emitted one block
+   * per line, or emitted the tail bottom-up, would satisfy the checks above: the
+   * tail is exactly one block and its lines are in the order the child wrote them.
    */
   const revealsTheWholeError = (segments: RowSegment[]): void => {
     expect(drawnText(segments)).toContain(LAST_ERROR_LINE);
@@ -157,6 +175,26 @@ describe("expanded view: a multi-line error is readable in full (issue #112)", (
       segments.filter((s) => s.text.includes(LAST_ERROR_LINE)).map((s) => s.kind),
       "the error's last line is inside a row again",
     ).toEqual(["block"]);
+    const heads = segments
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => s.kind === "row" && s.text.includes(FIRST_ERROR_LINE));
+    expect(heads, "the error's first line is no longer the row it was").toHaveLength(1);
+    const tails = segments.filter(
+      (s) => s.kind === "block" && TAIL_ERROR_LINES.some((line) => s.text.includes(line)),
+    );
+    // One block, not one per line: `RowBlock` renders a block by wrapping it, so
+    // N blocks for N lines would draw the tail the same at a wide frame and hide
+    // the difference at a narrow one (where each block re-wraps on its own).
+    expect(tails, "the error's tail is not carried by exactly one block").toHaveLength(1);
+    const [tail] = tails;
+    expect(
+      tail === undefined ? [] : plainLines(tail.text),
+      "the error's tail block does not carry its lines in order",
+    ).toEqual(TAIL_ERROR_LINES);
+    expect(
+      segments.indexOf(tail!),
+      "the tail block was emitted before the row head, so the error reads bottom-up",
+    ).toBeGreaterThan(heads[0]!.i);
   };
 
   it("shows every line of a finished run's error, the last one as a block", () => {
@@ -172,11 +210,36 @@ describe("expanded view: a multi-line error is readable in full (issue #112)", (
   it("shows every line of a streaming run's error, the last one as a block", () => {
     const rows = new CapturingRowBlock();
     renderProgressExpanded(rows, makeProgress({ status: "failed" }), theme);
-    revealsTheWholeError(rows.lastSegments!);
+    revealsTheWholeError(captured(rows));
   });
 
   it("shows every line of a streaming parallel run's error, the last one as a block", () => {
     revealsTheWholeError(buildProgressExpandedText(makeProgress({ status: "failed" }), theme));
+  });
+
+  // Both streaming builders choose this branch on `status === "completed" ||
+  // outcome`, and then hand `progress.error` to `buildOutcomeLine`, which reads
+  // `error` before `outcome`. `stream.ts` only ever sets `error` for a failed run
+  // today, but `progress` is also data read back out of a persisted session, and
+  // the branch's own contract is "state or outcome, plus whatever error came with
+  // it" — so the error has to be revealed here too. Until now it was the one place
+  // the finished view's fix had not reached: same run, full error in
+  // `buildExpandedText`, one line here.
+  it("shows every line of a *completed* streaming run's error, not just a failed one's", () => {
+    const rows = new CapturingRowBlock();
+    renderProgressExpanded(rows, makeProgress({ status: "completed" }), theme);
+    revealsTheWholeError(captured(rows));
+  });
+
+  it("shows every line of a *completed* parallel streaming run's error", () => {
+    revealsTheWholeError(buildProgressExpandedText(makeProgress({ status: "completed" }), theme));
+  });
+
+  it("reveals the tail for a still-running progress that already carries an outcome", () => {
+    // The `|| progress.outcome` half of the same condition.
+    const rows = new CapturingRowBlock();
+    renderProgressExpanded(rows, makeProgress({ status: "running", outcome: "truncated" }), theme);
+    revealsTheWholeError(captured(rows));
   });
 
   it("draws the whole error on screen at a narrow width as well as a wide one", () => {
@@ -244,18 +307,30 @@ describe("expanded view: a multi-line error is readable in full (issue #112)", (
     const segments = buildExpandedText(failed, undefined, theme);
     const outcome = segments.filter((s) => s.text.includes("401 unauthorized"));
     expect(outcome).toEqual([{ kind: "row", text: "[error]✗ 401 unauthorized" }]);
-    expect(drawnText(segments).split("\n").filter((l) => l.includes("401"))).toHaveLength(1);
+    // Counted as segments, because a segment's text is already multi-line: the
+    // claim is "the error reached the row layer exactly once", which a duplicate
+    // (the same line in a row *and* in a block) would fail.
+    expect(segments.filter((s) => s.text.includes("401"))).toHaveLength(1);
   });
 
   it("draws no blank row for an error that merely ends in a newline", () => {
-    // stderr usually ends in one, so this is the common case rather than a corner:
-    // a trailing newline is not a line of content, and opening a block for it
+    // A trailing newline is not a line of content, and opening a block for it
     // would add a blank row to the bottom of every failed run.
     const failed = makeResult({ exitCode: 1, error: "401 unauthorized\n" });
     delete failed.outcome;
     const segments = buildExpandedText(failed, undefined, theme);
     expect(segments.filter((s) => s.kind === "block" && s.text.trim() === "")).toEqual([]);
-    expect(drawnText(segments).split("\n").filter((l) => l.includes("401"))).toHaveLength(1);
+    // And through the real row component, because the segment layer cannot see
+    // the failure this guards against: an emitted `row("")` is invisible in the
+    // list above yet `RowBlock` would draw it as a blank bottom row.
+    const rows = new CapturingRowBlock();
+    renderExpanded(rows, failed, undefined, theme);
+    const drawn = rows.render(200).map(content);
+    expect(drawn.filter((l) => l.includes("401"))).toHaveLength(1);
+    expect(
+      drawn[drawn.length - 1],
+      `a blank row was drawn under the outcome: ${JSON.stringify(drawn)}`,
+    ).toContain("401 unauthorized");
   });
 
   it("still lets the error win over the outcome, even when the error is multi-line", () => {
@@ -270,27 +345,128 @@ describe("expanded view: a multi-line error is readable in full (issue #112)", (
     expect(out).not.toMatch(/Truncated/);
   });
 
-  // The asymmetry is the point, so it is pinned from both sides. The collapsed
-  // side already has its own pins — `compact.test.ts`
-  // ("hands over three row segments carrying whole fields, so newlines reach the
-  // row cut") and `tool-row.width-audit.test.ts` ("keeps a multiline task or
-  // error to three rows per agent (collapsed)") — so this is deliberately the
-  // same claim on the same fixture, to make sure the two views are never
-  // "fixed" into convergence.
-  it("keeps the collapsed view cutting at the first line, on the same error", () => {
-    const sink = new RecordingSink();
-    renderCompactSingle(sink, failedResult(), undefined, sgrTheme, {
-      state: {},
-      invalidate: () => {},
+  // The collapsed half of this asymmetry is pinned where that code lives, not here: `compact.test.ts` ("hands over three row segments carrying whole fields, so newlines reach the row cut") and `tool-row.width-audit.test.ts` ("keeps a multiline task or error to three rows per agent (collapsed)").
+
+  describe("a child that wrote CRLF line endings (a Windows child)", () => {
+    // `stream.ts` reads stderr as `Buffer.concat(...).toString("utf-8").trim()` —
+    // no newline normalisation — so `\r\n` arrives intact from a Windows child.
+    // `pi-tui`'s `wrapTextWithAnsi` splits on `/\r\n|\r|\n/` but `truncateRow`
+    // splits on `"\n"`, so a `\r` surviving the split rides inside a `row` and
+    // gets drawn: pi-tui does not strip it, and a terminal interpreting a bare CR
+    // rewinds the cursor to column 0 and paints the row over itself.
+    const CRLF_ERROR = ERROR_LINES.join("\r\n");
+
+    it("keeps every carriage return out of the segments and off the screen", () => {
+      const builders: Array<[string, () => RowSegment[]]> = [
+        ["buildExpandedText", () => buildExpandedText(failedResult({ error: CRLF_ERROR }), undefined, theme)],
+        ["renderProgressExpanded", () => {
+          const rows = new CapturingRowBlock();
+          renderProgressExpanded(rows, makeProgress({ status: "completed", error: CRLF_ERROR }), theme);
+          return captured(rows);
+        }],
+        ["buildProgressExpandedText", () => buildProgressExpandedText(makeProgress({ status: "failed", error: CRLF_ERROR }), theme)],
+      ];
+      for (const [name, build] of builders) {
+        const segments = build();
+        expect(
+          segments.filter((s) => s.text.includes("\r")).map((s) => s.text),
+          `${name} left a carriage return inside a segment`,
+        ).toEqual([]);
+      }
+      // Asserted on the RAW rendered lines: `content()` trims trailing whitespace,
+      // so it would swallow the very byte this is about.
+      for (const width of [200, 80]) {
+        const rows = new CapturingRowBlock();
+        renderExpanded(rows, failedResult({ error: CRLF_ERROR }), undefined, sgrTheme);
+        const rendered = rows.render(width);
+        for (const line of rendered) {
+          expect(JSON.stringify(line), `a bare CR was drawn at width ${width}`).not.toContain("\\r");
+        }
+        // Nothing was lost by the split either — every line still reaches the frame.
+        const joined = rendered.map(content).join("").replace(/\s+/g, "");
+        for (const line of ERROR_LINES) {
+          expect(joined, `line lost at ${width}: ${JSON.stringify(rendered.map(content))}`)
+            .toContain(line.replace(/\s+/g, ""));
+        }
+      }
     });
-    const rows = new RowBlock();
-    rows.setSegments(sink.segments!);
-    const drawn = rows.render(80).map(content);
-    expect(drawn).toHaveLength(3);
-    expect(drawn[2], "the collapsed row no longer says it was cut").toMatch(/✗ .*\.\.\.$/);
-    expect(drawn[2]).toContain("Command failed");
-    expect(drawn.join("\n"), "the collapsed view started revealing what it summarizes")
-      .not.toContain(LAST_ERROR_LINE);
   });
 });
 
+// ── The fallback each builder keeps (the legacy-session shape) ──────────────
+
+describe("expanded view: a run with nothing to report falls back the way its own builder did", () => {
+  // `outcome` is optional (`types.ts:38,70,134`) and only populated from 8cf0d12
+  // (#103) on, so both shapes below reach the empty case: a session JSON persisted
+  // before it renders the finished view with `status:"completed"` and no outcome,
+  // and a progress that reports a terminal state and no outcome renders the two
+  // streaming views that way. Each site's fallback is load-bearing there, and they
+  // are *not* the same fallback: the finished view says `✗ Failed`, the two
+  // streaming views say `✓ Done`. Relabelling a completed run failed is how a
+  // useful answer gets thrown away by whoever reads it.
+  const saysDoneAndNeverFailed = (text: string): void => {
+    expect(text).toContain("✓ Done");
+    expect(text).not.toMatch(/Failed/);
+  };
+
+  it("says Done for a finished result that predates the outcome field", () => {
+    const legacy = makeResult();
+    delete legacy.outcome;
+    saysDoneAndNeverFailed(drawnText(buildExpandedText(legacy, undefined, theme)));
+  });
+
+  it("says Done for streaming progress that predates the outcome field", () => {
+    const rows = new CapturingRowBlock();
+    renderProgressExpanded(rows, makeProgress({ status: "completed", error: undefined }), theme);
+    saysDoneAndNeverFailed(drawnText(captured(rows)));
+  });
+
+  it("says Done for parallel streaming progress that predates the outcome field", () => {
+    saysDoneAndNeverFailed(
+      drawnText(buildProgressExpandedText(makeProgress({ status: "completed", error: undefined }), theme)),
+    );
+  });
+
+  it("still names a truncated or aborted streaming run by its outcome, not as failed", () => {
+    // The same sites, one step on from the legacy shape: a real outcome has to win
+    // over the caller's fallback, and `✓ Done` must not flatten it either.
+    for (const outcome of ["truncated", "aborted"] as const) {
+      const expected = outcome === "truncated" ? /truncated/i : /aborted/i;
+      const rows = new CapturingRowBlock();
+      renderProgressExpanded(rows, makeProgress({ status: "completed", outcome, error: undefined }), theme);
+      const streaming = drawnText(captured(rows));
+      expect(streaming, `renderProgressExpanded flattened ${outcome}`).toMatch(expected);
+      expect(streaming).not.toMatch(/Failed|✓ Done/);
+      const parallel = drawnText(
+        buildProgressExpandedText(makeProgress({ status: "completed", outcome, error: undefined }), theme),
+      );
+      expect(parallel, `buildProgressExpandedText flattened ${outcome}`).toMatch(expected);
+      expect(parallel).not.toMatch(/Failed|✓ Done/);
+    }
+  });
+
+  it("falls back to Failed on the finished view when a result reports nothing at all", () => {
+    // One door onto the finished view's bottom row: a result with neither an
+    // outcome nor an error and a nonzero exit — `buildExpandedText`'s own `else`,
+    // which keeps saying Failed because such a run has no success to claim.
+    const nothing = makeResult({ exitCode: 1 });
+    delete nothing.outcome;
+    const out = drawnText(buildExpandedText(nothing, undefined, theme));
+    expect(out).toContain("✗ Failed");
+    expect(out).not.toMatch(/✓ Done/);
+  });
+
+  it("falls back to Failed — not Done — for an outcome this build cannot name", () => {
+    // The other door, and the one that only exists now the fallback is the
+    // caller's: `outcome` set to something `buildOutcomeLine` has no case for (a
+    // session written by a newer build, or a widened *Run outcome* axis) leaves it
+    // returning `undefined`, and the segment `buildExpandedText` passes in is what
+    // gets drawn. It stays Failed — a run whose ending this code cannot read is
+    // not a success this code may claim — which is the byte this site rendered
+    // before the fallback moved, so moving it changed nothing here.
+    const unknown = makeResult({ exitCode: 1, outcome: "detached" as RunOutcome });
+    const out = drawnText(buildExpandedText(unknown, undefined, theme));
+    expect(out).toContain("✗ Failed");
+    expect(out).not.toMatch(/✓ Done/);
+  });
+});
