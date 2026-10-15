@@ -6,10 +6,11 @@ import { renderToolCallLine } from "@pi-archimedes/core/tool-render";
 type Theme = { fg: (token: string, text: string) => string; bold: (text: string) => string };
 
 // The expanded view mixes two kinds of line and says which is which (see
-// `row-block.ts`): a **row** (label, activity, outcome) stays one line and fills
-// the frame; a **block** (the stats line, the task text, the tool-call history,
-// the output) keeps wrapping, because the expanded view is where all of it is
-// meant to be readable (ADR 0020). The stats line is a block and not a row
+// `row-block.ts`): a **row** (label, activity, the first line of an outcome) stays
+// one line and fills the frame; a **block** (the stats line, the task text, the
+// tool-call history, the output, the lines of an error after the first) keeps
+// wrapping, because the expanded view is where all of it is meant to be readable
+// (ADR 0020). The stats line is a block and not a row
 // because nothing else repeats its numbers: cut at the frame, its tail — tokens,
 // duration, cost — would simply be gone on a narrow terminal.
 
@@ -30,15 +31,43 @@ function formatToolCall(call: SubagentToolCall | string, theme: Theme): string {
 // The bottom row of a finished view. The *Run outcome* wins over the done/failed
 // pair: a truncated answer is not a failed run, and labelling it "✗ Failed" is
 // how a useful answer gets thrown away by whoever reads it.
-function outcomeRow(
+//
+// An error is stderr, and stderr arrives with newlines in it. As one `row` the
+// view could only ever show its first line — `truncateRow` treats a newline as a
+// hard boundary (see `row-block.ts`), which is right for the collapsed view (the
+// three-rows-per-agent shape is pinned in `tool-row.width-audit.test.ts`) and
+// wrong here: the expanded view is where everything is meant to be readable
+// (ADR 0020), and a stack trace's last line is usually the informative one. So
+// the first line stays the row it was, and the lines after it are handed over as
+// one `block` — this repo's existing mechanism for "read this in full".
+//
+// The raw error is split *before* anything is coloured, and every line is
+// coloured on its own. `theme.fg("error", "✗ " + error)` wraps the whole
+// multi-line string in one span whose reset lands on the last line only, so
+// every earlier line would be drawn — padding included — inside an open span.
+// Measured against `wrapTextWithAnsi`: it re-opens the active codes at the start
+// of a continuation line but never invents a reset at the end of one.
+function outcomeSegments(
   data: { outcome?: RunOutcome | undefined; error: string | undefined },
   theme: Theme,
   fallback: { failed: string },
-): string {
-  const line = buildOutcomeLine({ outcome: data.outcome, error: data.error }, theme);
-  if (line) return line;
-  if (data.error) return theme.fg("error", "✗ " + data.error);
-  return theme.fg("error", "✗ " + fallback.failed);
+): RowSegment[] {
+  // Same precedence as `buildOutcomeLine`: `error` is read first, so a run that
+  // carries both reports the error and not the outcome. Pinned in
+  // `expanded.test.ts` rather than re-decided here.
+  if (data.error) {
+    const [head, ...tail] = data.error.split("\n");
+    const segments: RowSegment[] = [row(theme.fg("error", "✗ " + head))];
+    // stderr normally ends in a newline, so a tail of nothing but blanks is the
+    // common case; opening a block for it would add a blank row under every
+    // failed run.
+    if (tail.some((line) => line.trim() !== "")) {
+      segments.push(block(tail.map((line) => (line ? theme.fg("error", line) : "")).join("\n")));
+    }
+    return segments;
+  }
+  const line = buildOutcomeLine({ outcome: data.outcome, error: undefined }, theme);
+  return [row(line ?? theme.fg("error", "✗ " + fallback.failed))];
 }
 
 // ── Expanded completed result ───────────────────────────────────────────────
@@ -97,7 +126,7 @@ export function buildExpandedText(
   if (result.error || result.outcome || result.exitCode === 0) {
     lines.push(row(""));
     if (result.outcome || result.error) {
-      lines.push(row(outcomeRow({ outcome: result.outcome, error: result.error }, theme, { failed: "Failed" })));
+      lines.push(...outcomeSegments({ outcome: result.outcome, error: result.error }, theme, { failed: "Failed" }));
     } else {
       lines.push(row(theme.fg("success", "✓ Done")));
     }
@@ -177,7 +206,7 @@ export function renderProgressExpanded(
     lines.push(row(outcomeLine ?? theme.fg("success", "✓ Done")));
   } else if (progress.status === "failed") {
     lines.push(row(""));
-    lines.push(row(outcomeRow({ outcome: undefined, error: progress.error }, theme, { failed: "Failed" })));
+    lines.push(...outcomeSegments({ outcome: undefined, error: progress.error }, theme, { failed: "Failed" }));
   }
 
   rows.setSegments(lines);
@@ -247,7 +276,7 @@ export function buildProgressExpandedText(
     lines.push(row(outcomeLine ?? theme.fg("success", "✓ Done")));
   } else if (progress.status === "failed") {
     lines.push(row(""));
-    lines.push(row(outcomeRow({ outcome: undefined, error: progress.error }, theme, { failed: "Failed" })));
+    lines.push(...outcomeSegments({ outcome: undefined, error: progress.error }, theme, { failed: "Failed" }));
   }
 
   return lines;
