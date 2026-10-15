@@ -66,14 +66,19 @@ function outcomeSegments(
   // completed branch and `✗ Failed` from its failed one. So "nothing to report"
   // means something different at each site, and the `✓ Done` ones are why the
   // answer cannot be baked in here: `outcome` is optional on `SubagentProgress`
-  // (`types.ts:70`), so a run can report a terminal status with no outcome at all
-  // — every session persisted before #103 / 8cf0d12 added the field — and a
-  // helper-wide `✗ Failed` there would relabel a finished run a broken one.
+  // (`types.ts:38`; `SubagentResult` at `:70`, `SubagentRunReport` at `:134`), so a
+  // run can report a terminal status with no outcome at all — every session
+  // persisted before #103 / 8cf0d12 added the field — and a helper-wide
+  // `✗ Failed` there would relabel a finished run a broken one.
   fallback: RowSegment,
 ): RowSegment[] {
-  // Same precedence as `buildOutcomeLine`: `error` is read first, so a run that
-  // carries both reports the error and not the outcome. Pinned in
-  // `expanded.test.ts` rather than re-decided here.
+  // Same precedence as `buildOutcomeLine` (`format.ts:101`): `error` is read first,
+  // so a run that carries both reports the error and not the outcome. Pinned in
+  // `expanded.test.ts` rather than re-decided here. It is also why neither streaming
+  // branch may assume it has no error in hand: each opens on a completed *status* or
+  // on any reported outcome, and either can arrive together with a multi-line one,
+  // so a completed progress's error gets the same head-row-then-block treatment here
+  // that the failed branch gives its own (#112).
   if (data.error) {
     // `/\r\n|\r|\n/`, not `"\n"`: `stream.ts` reads stderr as
     // `Buffer.concat(...).toString("utf-8").trim()` with no newline
@@ -245,17 +250,12 @@ export function renderProgressExpanded(
     lines.push(row(renderToolCallLine("running", progress.currentTool, suffix, theme)));
   }
 
-  // Status at bottom. The branch opens on a completed *status* or on any reported
-  // outcome, but the error the progress carries is read first by `outcomeSegments`,
-  // mirroring `buildOutcomeLine`'s precedence (`format.ts:101`) — so an error
-  // arriving on a progress that also reports one is drawn here, and it gets the
-  // same treatment the `failed` branch below gives its own (#112).
+  // Status at bottom. Which fallback each branch hands the helper, and why the
+  // helper is not the one to decide it, is written once above `outcomeSegments`.
   if (progress.status === "completed" || progress.outcome) {
     lines.push(row(""));
-    // `✓ Done` is this caller's fallback, passed in rather than baked into
-    // `outcomeSegments`: `outcome` is optional on `SubagentProgress`, so a run
-    // that reports a state and nothing else lands on the empty case, and a
-    // helper-wide `✗ Failed` there would relabel a finished run a broken one.
+    // `✓ Done`: this branch's agent reached a terminal state, so a run with nothing
+    // to name its outcome by is finished work here — the ✗ below would bury it.
     lines.push(...outcomeSegments(
       { outcome: progress.outcome, error: progress.error },
       theme,
@@ -263,6 +263,7 @@ export function renderProgressExpanded(
     ));
   } else if (progress.status === "failed") {
     lines.push(row(""));
+    // The only branch here that may call a run broken, so it passes `✗ Failed`.
     lines.push(...outcomeSegments(
       { outcome: undefined, error: progress.error },
       theme,
@@ -330,17 +331,14 @@ export function buildProgressExpandedText(
     lines.push(row(line));
   }
 
-  // Status at bottom. The branch opens on a completed *status* or on any reported
-  // outcome, but the error the progress carries is read first by `outcomeSegments`,
-  // mirroring `buildOutcomeLine`'s precedence (`format.ts:101`) — so an error
-  // arriving on a progress that also reports one is drawn here, and it gets the
-  // same treatment the `failed` branch below gives its own (#112).
+  // Status at bottom — the same pair of branches `renderProgressExpanded` draws for
+  // the single running agent, here as one block of the parallel view. What each
+  // branch passes, and why the helper cannot decide it, is written once above
+  // `outcomeSegments`.
   if (progress.status === "completed" || progress.outcome) {
     lines.push(row(""));
-    // `✓ Done` is this caller's fallback, passed in rather than baked into
-    // `outcomeSegments`: `outcome` is optional on `SubagentProgress`, so a run
-    // that reports a state and nothing else lands on the empty case, and a
-    // helper-wide `✗ Failed` there would relabel a finished run a broken one.
+    // `✓ Done`, and never the failed branch's segment: this block claims its agent
+    // finished, and a batch read as failed is a batch whose answers get discarded.
     lines.push(...outcomeSegments(
       { outcome: progress.outcome, error: progress.error },
       theme,
@@ -348,6 +346,7 @@ export function buildProgressExpandedText(
     ));
   } else if (progress.status === "failed") {
     lines.push(row(""));
+    // `✗ Failed`: this branch got a broken run, the only one allowed to say so.
     lines.push(...outcomeSegments(
       { outcome: undefined, error: progress.error },
       theme,
