@@ -74,7 +74,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
       params: {
         agent?: string;
         task?: string;
-        tasks?: Array<{ agent?: string; task: string; count?: number; model?: string; cwd?: string }>;
+        tasks?: Array<{ agent?: string; task: string; model?: string; cwd?: string }>;
         model?: string;
         cwd?: string;
       },
