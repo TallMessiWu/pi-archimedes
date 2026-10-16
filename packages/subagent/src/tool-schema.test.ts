@@ -13,26 +13,47 @@
  * replacement).
  *
  * The review that followed found a SECOND instance of the same defect class the
- * issue never named: `count?: number` on the parallel task item, read nowhere —
- * `execute` reads `agent`, `task`, `model`, `cwd` from each task, and
- * `executeParallel`'s own task type has no `count`. It differed from `async` in
- * one instructive way: it lived only in the TS-facing `params` type in
- * `index.ts`, never in `TaskItem`, so the JSON Schema the model sees never
- * advertised it and a guard that enumerates the schema alone could not have
- * caught it. So this file guards both surfaces, and guards them against each
- * other:
+ * issue never named: `count?: number` on the parallel task item, read nowhere.
+ * It differed from `async` in one instructive way: it lived only in the
+ * hand-written `params` type on `execute` in `index.ts`, never in `TaskItem`, so
+ * the JSON Schema the model sees never advertised it and a guard that enumerates
+ * the schema alone could not have caught it. The root cause of both was one
+ * contract stated twice — once for the model, once for TypeScript — with nothing
+ * keeping the two in step. So the fix is structural rather than another
+ * assertion: `SubagentParams` in `tool-schema.ts` is
+ * `Static<typeof SUBAGENT_PARAMS_SCHEMA>` and `execute` takes that, which is the
+ * `ask` / `sudo` precedent. There is no second list left to drift on its own, so
+ * the only way to introduce a `count` is to say so at one of the two surfaces a
+ * reviewer reads: the schema, or `execute`'s signature.
  *
- *   1. the top-level schema parameter set, pinned exactly;
- *   2. the parallel task item's declared property set, pinned exactly;
- *   3. those names against the two TS-side places a phantom can hide — the
- *      inline `params` type `execute` takes, and the task fields it reads.
+ * What is guarded where, stated honestly:
  *
- * Everything is enumerated from the artefacts themselves (the schema object, and
- * the source text of `index.ts`) — no hand-written copy of the parameter list
- * that could itself drift. Only what can fail independently is asserted: three
- * of the file's original four assertions were strictly implied by the exact-set
- * check — including one that re-typed the surviving names by hand, the drift the
- * header claims to avoid — and were dropped rather than reworded.
+ *   - the schema's declared sets are pinned below, exactly and enumerated from
+ *     the schema object rather than restated;
+ *   - there is no second TS-side list left for a test to police. `tsc` does
+ *     reject a params type that *contradicts* the schema — `model?: number` at
+ *     the params position fails `registerTool`'s `execute` with TS2322 — but
+ *     that check is neither new nor the derivation's doing: `registerTool`
+ *     infers `TParams` from `parameters` and declares `execute`'s `params` as
+ *     `Static<TParams>` (`pi-coding-agent` `dist/core/extensions/types.d.ts:514`),
+ *     so the same TS2322 fires with or without `SubagentParams` (measured against
+ *     the pre-derivation literal, and it failed there too).
+ *   - what `tsc` never caught, and still does not, is the phantom itself. An
+ *     extra *optional* member only widens the params type, and pi declares
+ *     `execute` as a method, so method parameters are bivariant: `count?: number`
+ *     in the old literal, in `TaskItem` inside that literal, and spliced on as
+ *     `params: SubagentParams & { count?: number }` all compile (each measured).
+ *     So the derivation removes the *place* a phantom hid — it does not add a
+ *     compiler check that would catch one. Writing a phantom now takes a
+ *     deliberate `& { … }` at the params position, an edit a reviewer sees, where
+ *     before it was the default way to state the contract.
+ *   - the residual gap: nothing here detects a schema field that `execute`
+ *     declares and then ignores — `async` was exactly that, and it stays
+ *     undetectable, because `execute`'s body is erased at runtime and a runtime
+ *     test cannot see a type. Measured: adding `count` to the schema turns the
+ *     task-item pin below red while `tsc` stays green, since the body never reads
+ *     it. What covers that is the two pins, a schema small enough to read in one
+ *     screen — five top-level parameters, four task fields — and review.
  *
  * If a name reappears here it has to arrive together with the behaviour that
  * honours it (#113 first, for `async`) and a consumer that reads it; until then
@@ -40,8 +61,6 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { Value } from "typebox/value";
 import { SUBAGENT_PARAMS_SCHEMA } from "./tool-schema.js";
 
@@ -71,355 +90,14 @@ function declaredTaskItemParams(): string[] {
   return propertyNames(items, "The `tasks` item schema (TaskItem)");
 }
 
-// ── The two TS-side surfaces a phantom parameter can hide in ────────────────
-//
-// `index.ts` declares what it accepts twice more, neither of them the schema:
-// the inline `params` type on `execute`, and the set of task fields the parallel
-// branch actually reads off each task. #114's `count` lived in the first and was
-// absent from the second, which is exactly the drift these two helpers detect.
-// They are parsed out of the source text — the same technique `core`'s
-// `log-discipline.test.ts` uses — because there is no runtime reflection over
-// erased TS types, and a hand-written list of the names would be the thing the
-// guard exists to catch.
-//
-// The precedent stops at the technique, though, and the difference is what makes
-// the two helpers below more than a grep: `log-discipline.test.ts` only greps
-// whole lines for a call shape, so a match on any line is the fact it wants,
-// while this file reads *structure* — a member list scoped by a type literal, a
-// field list scoped by one brace-balanced branch. Scoping to a region is where a
-// naive regex lies: it matches names inside comments and inside template strings
-// as happily as inside code, and it ends a region wherever a marker string
-// happens to sit. So the code view is built before anything is matched:
-// comments and string/template interiors blanked, and the branch read to its
-// matching brace. Both are load-bearing here and neither would be needed for a
-// line-level grep.
-
-const INDEX_SOURCE = readFileSync(fileURLToPath(new URL("./index.ts", import.meta.url)), "utf8");
-
-/**
- * `INDEX_SOURCE` with every comment and every string / template / regex
- * *interior* replaced by spaces. Newlines are kept, so an offset in the result
- * is the same offset in the file.
- *
- * Why not `text.replace(...)` for the comments followed by a brace count:
- * `index.ts` contains `n.replace(/"/g, '')`, where one `/` opens a regex literal
- * and a `"` sits *inside* it. Stripping comments and quotes without having read
- * the string and regex states that far takes that `"` for the start of a string
- * and blanks the real statement after it — dropping a genuine `t.<field>` read
- * and reporting a phantom that was never declared. A guard that lies about a real
- * read is worse than the phantom it guards, so the scan tracks each of them: line
- * comments, block comments, single- and double-quoted strings, template literals —
- * where `${…}` re-enters code, so an interpolation is kept (`` `"${t.agent}"` ``
- * is a real read of `agent`) and only its braces count inside the template — and
- * regex literals.
- *
- * Deliberately narrow, and loud only where it can tell it has stopped: a backslash
- * before a newline inside a quoted string or a regex throws, because a line
- * continuation would close the literal early and read its tail as code, and that
- * mis-scan still balances its braces. (A template needs no such rule: it may hold
- * newlines, so its own scan carries on past them.) Two edges are not caught, and
- * both would have to appear inside the parallel branch to matter. A `[…]` character
- * class is not modelled, so `[{]` or a quote inside one blanks cleanly instead of
- * throwing. A `/` after `)` is read as division — `({a: 1}) / 2` is fine — but a `/`
- * straight after a `}` opens a regex state that runs to the next `/`, blanking the
- * real `t.<field>` reads between them while the braces still balance. So the guard
- * still fails, but it can name the wrong cause; that is the honest limit, and a real
- * JavaScript lexer is the wrong trade for a guard test.
- */
-function blankNonCode(source: string): string {
-  // Reads always come from `source` and writes always go to `out`: blanking in
-  // place would erase the very backslash the escape rule below depends on, and the
-  // next character would then look unescaped and end the string early.
-  const out = source.split("");
-  let mode: "code" | "line" | "block" | "single" | "double" | "template" | "regex" = "code";
-  /** The brace depth each open `${` was seen at; a `}` there closes the interpolation, not a block. */
-  const interpolations: number[] = [];
-  let depth = 0;
-  let i = 0;
-  while (i < source.length) {
-    const ch = source[i] as string;
-    const next = source[i + 1];
-    switch (mode) {
-      case "line":
-        if (ch === "\n") {
-          mode = "code";
-          i++;
-          continue;
-        }
-        out[i] = " ";
-        i++;
-        continue;
-      case "block":
-        if (ch === "*" && next === "/") {
-          out[i] = " ";
-          out[i + 1] = " ";
-          i += 2;
-          mode = "code";
-          continue;
-        }
-        if (ch !== "\n") out[i] = " ";
-        i++;
-        continue;
-      case "single":
-      case "double":
-      case "regex": {
-        const quote = mode === "single" ? "'" : mode === "double" ? '"' : "/";
-        if (ch === "\\") {
-          // A backslash immediately before a newline is a line continuation: the
-          // literal carries on over a newline that no quoted string or regex can
-          // legally contain. Reading it as the end of the literal would close the
-          // string a line early and then treat its remaining text as code — the one
-          // mis-scan this scanner could never see, because it still finds balanced
-          // braces. So it is an error rather than a guess. (A template needs no such
-          // rule below: a template may hold newlines, continuation or not.)
-          if (next === "\n") {
-            throw new Error(
-              `blankNonCode(): a backslash-newline line continuation inside a ${quote}-quoted literal in index.ts — ` +
-                "this scanner does not support it: the literal would be closed early and its tail read as code",
-            );
-          }
-          // A backslash escapes the next character inside a string, a template and a
-          // regex alike, so the pair is consumed together: neither `"\\"` nor `/\//`
-          // ends where a scan that only looked at the current character would say.
-          if (next !== undefined) {
-            out[i] = " ";
-            out[i + 1] = " ";
-            i += 2;
-            continue;
-          }
-        }
-        if (ch === quote) {
-          out[i] = " ";
-          i++;
-          mode = "code";
-          continue;
-        }
-        // A newline cannot legally sit inside these three: end the literal there,
-        // so one unbalanced quote cannot swallow the rest of the file and hide the
-        // branch's reads entirely.
-        if (ch === "\n") {
-          mode = "code";
-          i++;
-          continue;
-        }
-        out[i] = " ";
-        i++;
-        continue;
-      }
-      case "template": {
-        if (ch === "\\" && next !== undefined && next !== "\n") {
-          out[i] = " ";
-          out[i + 1] = " ";
-          i += 2;
-          continue;
-        }
-        if (ch === "`") {
-          out[i] = " ";
-          i++;
-          mode = "code";
-          continue;
-        }
-        if (ch === "$" && next === "{") {
-          out[i] = " ";
-          out[i + 1] = " ";
-          i += 2;
-          interpolations.push(depth);
-          mode = "code";
-          continue;
-        }
-        if (ch !== "\n") out[i] = " ";
-        i++;
-        continue;
-      }
-      case "code": {
-        if (ch === "/" && next === "/") {
-          out[i] = " ";
-          i++;
-          mode = "line";
-          continue;
-        }
-        if (ch === "/" && next === "*") {
-          out[i] = " ";
-          out[i + 1] = " ";
-          i += 2;
-          mode = "block";
-          continue;
-        }
-        if (ch === "'") {
-          out[i] = " ";
-          i++;
-          mode = "single";
-          continue;
-        }
-        if (ch === '"') {
-          out[i] = " ";
-          i++;
-          mode = "double";
-          continue;
-        }
-        if (ch === "`") {
-          out[i] = " ";
-          i++;
-          mode = "template";
-          continue;
-        }
-        // The lookback reads `out`, the part already scanned, so a `/` whose
-        // division-operand was a blanked string reads as what it is.
-        // The lookback deliberately reads `source` and not `out`: the quote or the
-        // backtick that just closed a literal is exactly the signal that this `/`
-        // divides it, and a blanked view would have hidden that.
-        if (ch === "/" && startsRegex(source, i)) {
-          out[i] = " ";
-          i++;
-          mode = "regex";
-          continue;
-        }
-        if (ch === "{") {
-          depth++;
-          i++;
-          continue;
-        }
-        if (ch === "}") {
-          // This `}` closes an interpolation rather than a block, so the scan goes
-          // back into the template instead of ending the window early.
-          if (interpolations.length > 0 && interpolations[interpolations.length - 1] === depth) {
-            interpolations.pop();
-            out[i] = " ";
-            i++;
-            mode = "template";
-            continue;
-          }
-          depth--;
-          i++;
-          continue;
-        }
-        i++;
-        continue;
-      }
-    }
-  }
-  return out.join("");
-}
-
-/**
- * Whether the `/` at `i` opens a regex literal instead of dividing. A regex can
- * only appear where a value is expected, so the answer is whatever precedes it:
- * a regex after an operator, an opening bracket or a comma, a division after a
- * name, a digit, a closing bracket or a closing quote.
- *
- * Two known limits, both out of reach here: a `}` is not in the division set, so a
- * `/` straight after one reads as a regex and its state runs to the next `/`, and
- * the regex state itself does not model `[…]` classes. Either would have to appear
- * inside the parallel branch to matter; what they cost is blanked (or shifted) text,
- * never a fabricated field read — but a swallowed run of lines narrows the window the
- * reads are looked for in, so the guard can fail on a true verdict with a wrong named
- * cause. See the `blankNonCode()` header.
- */
-function startsRegex(text: string, i: number): boolean {
-  for (let j = i - 1; j >= 0; j--) {
-    const prev = text[j];
-    if (prev === undefined || prev === " " || prev === "\t" || prev === "\n") continue;
-    return !/[\w$)'"`\]]/.test(prev);
-  }
-  return true;
-}
-
-/**
- * Index of the `}` closing the `{` at `open`, measured on a comment/string-blanked
- * view so a brace inside a comment or a string cannot end the window early. Throws
- * rather than returning -1: an unclosed branch means the scan and the file disagree
- * about a literal, and the honest answer is "this parser stopped understanding".
- */
-function closingBrace(code: string, open: number): number {
-  let depth = 0;
-  for (let i = open; i < code.length; i++) {
-    if (code[i] === "{") depth++;
-    else if (code[i] === "}") {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  throw new Error(
-    "The parallel-mode branch of index.ts has no matching `}` in the comment/string-blanked view — " +
-      "either the branch was rewritten or this scanner mis-reads a string, template or regex inside it",
-  );
-}
-
-/**
- * `INDEX_SOURCE` with comments and literal interiors blanked (see
- * `blankNonCode`). Both parsers below read this and never the raw text: matching
- * raw text is what let a name merely *mentioned in a comment* count as a declared
- * or read field — the same false statement #114 is about, in the other direction.
- */
-const INDEX_CODE = blankNonCode(INDEX_SOURCE);
-
-/** Group 1 of every match of `re` in `text`, narrowing away the undefined case. */
-function group1(text: string, re: RegExp): string[] {
-  const names: string[] = [];
-  for (const match of text.matchAll(re)) {
-    const name = match[1];
-    if (name) names.push(name);
-  }
-  return names;
-}
-
-/**
- * Member names of the inline `tasks?: Array<{…}>` type on `execute`.
- * Read off the blanked view, so a member mentioned in a comment above the type is
- * not counted as declared. The window ends at the first `}>`, so it needs the
- * type to stay a flat object literal — which it is — and it says so rather than
- * mis-parsing if a nested object type ever appears inside it.
- */
-function declaredTaskItemTsType(): string[] {
-  const match = INDEX_CODE.match(/tasks\?:\s*Array<\{([\s\S]*?)\}>/);
-  const members = match?.[1];
-  if (!members) throw new Error("Could not find the inline `tasks?: Array<{…}>` type in index.ts");
-  if (members.includes("{")) {
-    throw new Error("The inline `tasks` item type is no longer a flat object literal — this parser needs widening");
-  }
-  return group1(members, /[;{\s]([A-Za-z_$][\w$]*)\??\s*:/g);
-}
-
-/**
- * The task fields `execute` reads, in the parallel branch: every `t.<name>`
- * between `if (params.tasks …) {` and the `}` that closes it. Scoped deliberately
- * — `index.ts` binds `t` to other things elsewhere (`getAllTools` maps
- * `(t) => t.name`), and those are not task fields — and scoped by *braces*, not by
- * the first comment that looks like a landmark: the old window ended at the
- * `// Single mode` marker, so it both swallowed the comments inside the branch
- * (where a `t.count` in prose counted as a read) and would stop early at that
- * string anywhere it appeared. Blank-and-balance is what makes "read" mean read in
- * code.
- */
-function readTaskFields(): string[] {
-  // The anchor is the same in the raw file and in the blanked view — the scan
-  // replaces characters with spaces, it never deletes one — so the offsets below
-  // line up with what a reader sees in `index.ts`.
-  const anchor = "if (params.tasks && params.tasks.length > 0";
-  const start = INDEX_CODE.indexOf(anchor);
-  if (start < 0) throw new Error("Could not find the parallel-mode branch in index.ts");
-  const end = closingBrace(INDEX_CODE, INDEX_CODE.indexOf("{", start));
-  const body = INDEX_CODE.slice(start, end + 1);
-  const fields = group1(body, /(?:^|[^\w$.])t\.([A-Za-z_$][\w$]*)/g);
-  // An empty list compared against the schema's list would fail for the wrong
-  // reason, so name the premises this rests on: the loop variable's name, and the
-  // scan window this read is scoped to (see `blankNonCode()` — a division-shaped
-  // token can narrow that window without unbalancing anything).
-  if (fields.length === 0) {
-    throw new Error(
-      "No `t.<field>` reads found in the parallel-mode branch — the loop variable was renamed, " +
-        "or the blanked view's scan window narrowed before reaching them (see blankNonCode())",
-    );
-  }
-  return fields;
-}
-
 describe("SUBAGENT_PARAMS_SCHEMA — declared parameter set (issue #114)", () => {
   it("declares exactly the parameters execute reads, nothing more", () => {
     // Exact and sorted, so it fails in BOTH directions: re-advertising a
-    // parameter nobody consumes (`async`, `count`) and over-eager deletion of
-    // one somebody does. Nothing else in this file needs to restate the list —
-    // every other assertion here derives its own from the artefacts.
+    // parameter nobody consumes (`async`) and over-eager deletion of one
+    // somebody does. Read from the schema object, never restated by hand. And
+    // because `SubagentParams` is derived, adding a name here is also adding it
+    // to what `execute` is handed, so this pin is where a new name has to be
+    // justified.
     expect([...declaredParams()].sort()).toEqual(["agent", "cwd", "model", "task", "tasks"]);
   });
 });
@@ -429,21 +107,6 @@ describe("TaskItem — declared parallel task item (issue #114, second instance:
     // `count` was the proof this surface needs its own pin: a phantom can be
     // added to the task item while the top-level set above stays green.
     expect([...declaredTaskItemParams()].sort()).toEqual(["agent", "cwd", "model", "task"]);
-  });
-});
-
-describe("TaskItem — the schema and the TS-side task contract agree (#114's `count`)", () => {
-  it("matches the member names of index.ts's inline `tasks` type", () => {
-    // The class of bug #114 only half-found: `count?: number` was declared to
-    // TypeScript here while the schema never advertised it, so the schema-only
-    // guard could not see it. Both sides are enumerated, neither is typed out.
-    expect([...declaredTaskItemTsType()].sort()).toEqual([...declaredTaskItemParams()].sort());
-  });
-
-  it("matches the task fields execute actually reads off each task", () => {
-    // A declared-and-unread field is the false promise; a read-and-undeclared
-    // field is a model that cannot reach the behaviour. Pin both directions.
-    expect([...new Set(readTaskFields())].sort()).toEqual([...declaredTaskItemParams()].sort());
   });
 });
 
@@ -463,7 +126,7 @@ describe("SUBAGENT_PARAMS_SCHEMA — legacy callers passing the deleted fields s
 
   it("accepts a task item carrying `count`", () => {
     expect(
-      Value.Check(SUBAGENT_PARAMS_SCHEMA as never, { tasks: [{ task: "x", count: 2 }] }),
+      Value.Check(SUBAGENT_PARAMS_SCHEMA as never, { tasks: [{ task: "x", count: 1 }] }),
     ).toBe(true);
   });
 });

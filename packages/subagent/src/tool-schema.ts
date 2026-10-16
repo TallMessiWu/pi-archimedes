@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import type { SubagentResult, SubagentRunReport } from "./types.js";
 
 // ── JSON Schema for tool parameters (TypeBox) ──────────────────────────────
@@ -29,6 +29,24 @@ export const SUBAGENT_PARAMS_SCHEMA = Type.Object({
     description: "Working directory for the subagent",
   })),
 });
+
+/**
+ * What `execute` is handed, derived from the schema rather than written out —
+ * the `ask` / `sudo` precedent (`AskParams`, `SudoExecInput`).
+ *
+ * #114's two phantoms were only possible because one contract was stated twice,
+ * independently: `async` in this schema, `count?: number` in the hand-written
+ * `params` type in `index.ts`. Nothing kept the two in step, and only one of them
+ * is what the model sees. Stating the contract once removes the second list: the
+ * schema is now the only way a name reaches `execute`'s declared params type.
+ *
+ * That is a structural fix, not a check. It does not stop anyone reading a
+ * declared field, and it does not make a phantom a compile error — `execute` is
+ * declared as a method, so bivariant parameters accept a widening `& { … }` at
+ * the params position. See the header of `tool-schema.test.ts` for what is
+ * enforced where, measured.
+ */
+export type SubagentParams = Static<typeof SUBAGENT_PARAMS_SCHEMA>;
 
 // ── JSON Schema for `structuredContent` ────────────────────────────────
 //
