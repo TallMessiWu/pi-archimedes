@@ -38,7 +38,9 @@ export const SUBAGENT_PARAMS_SCHEMA = Type.Object({
  * independently: `async` in this schema, `count?: number` in the hand-written
  * `params` type in `index.ts`. Nothing kept the two in step, and only one of them
  * is what the model sees. Stating the contract once removes the second list: the
- * schema is now the only way a name reaches `execute`'s declared params type.
+ * schema is now the only *default* source of a name in `execute`'s declared
+ * params type — see the caveat below, which is the whole difference between
+ * "only default" and "only".
  *
  * That is a structural fix, not a check. It does not stop anyone reading a
  * declared field, and it does not make a phantom a compile error — `execute` is

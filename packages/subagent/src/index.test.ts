@@ -484,3 +484,83 @@ describe("dispatch: cost is reported natively, not on the bus", () => {
     expect(busEmits.filter(([channel]) => channel === Events.COST_UPDATE)).toEqual([]);
   });
 });
+
+// The shape handed to the executor, pinned as data.
+//
+// `index.ts` maps each incoming task into the object `executeParallel` receives
+// (and builds the single equivalent for `executeSubagent`). That map is the only
+// place a per-task `cwd` or `model` reaches the child, and it had no guard: the
+// tests above drive both branches through the mocked executors and assert the
+// outcome, never the argument, so deleting a forwarded key stayed green
+// everywhere. This is the behavioural replacement for the source-text scanner
+// deleted in the same branch: it pins what is actually handed over by running the
+// tool, instead of parsing `index.ts` and risking a red run on an unrelated edit.
+// It is a narrower claim than the scanner's — it says nothing about whether the
+// executor later reads a key it is given — see the header of
+// `tool-schema.test.ts`, which states the residue that leaves uncovered.
+describe("dispatch: the object forwarded to the executor", () => {
+  it("forwards the full per-task shape to executeParallel", async () => {
+    discoverAgents.mockReturnValue([agentConfig()]);
+    await subagent(register()).execute(
+      "c",
+      { tasks: [{ agent: "reviewer", task: "a", model: "anthropic/claude-opus-4.5", cwd: "/tmp/work" }] },
+      undefined,
+      undefined,
+      makeCtx(),
+    );
+
+    expect(executeParallel).toHaveBeenCalledTimes(1);
+    const calls = executeParallel.mock.calls as unknown as Array<[{ tasks: Array<Record<string, unknown>> }]>;
+    const forwarded = calls[0]![0].tasks[0]!;
+    // Exact and sorted, so it fails in both directions: dropping a forward
+    // (`cwd`, `model`, …) silently loses a documented per-task option, and
+    // adding one changes the executor's input contract.
+    expect(Object.keys(forwarded).sort()).toEqual([
+      "activeModel",
+      "agent",
+      "agentConfig",
+      "cwd",
+      "model",
+      "task",
+      "toolCallId",
+    ]);
+    // The key set alone would still pass with the values swapped or dropped to
+    // undefined, so the two the #114 discussion cares about are pinned by value.
+    expect(forwarded.cwd).toBe("/tmp/work");
+    expect(forwarded.model).toBe("anthropic/claude-opus-4.5");
+    expect(forwarded.task).toBe("a");
+    expect(forwarded.toolCallId).toBe("c");
+  });
+
+  it("forwards the same per-task shape to executeSubagent on the single-run path", async () => {
+    discoverAgents.mockReturnValue([agentConfig()]);
+    await subagent(register()).execute(
+      "c",
+      { agent: "reviewer", task: "t", model: "anthropic/claude-opus-4.5", cwd: "/tmp/work" },
+      undefined,
+      undefined,
+      makeCtx(),
+    );
+
+    expect(executeSubagent).toHaveBeenCalledTimes(1);
+    const calls = executeSubagent.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    const forwarded = calls[0]![0];
+    // The single path takes its arguments flat rather than nested under `tasks`,
+    // so its key set differs from the parallel item's by exactly that: no
+    // nesting, and `signal` / `events` / `onUpdate` carried per run.
+    expect(Object.keys(forwarded).sort()).toEqual([
+      "activeModel",
+      "agent",
+      "agentConfig",
+      "cwd",
+      "events",
+      "model",
+      "onUpdate",
+      "signal",
+      "task",
+      "toolCallId",
+    ]);
+    expect(forwarded.cwd).toBe("/tmp/work");
+    expect(forwarded.model).toBe("anthropic/claude-opus-4.5");
+  });
+});
