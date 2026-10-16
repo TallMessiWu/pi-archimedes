@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { SUBAGENT_PARAMS_SCHEMA, SUBAGENT_OUTPUT_SCHEMA, subagentStructuredContent } from "./tool-schema.js";
+import { SUBAGENT_PARAMS_SCHEMA, SUBAGENT_OUTPUT_SCHEMA, subagentStructuredContent, type SubagentParams } from "./tool-schema.js";
 import { executeSubagent, executeParallel } from "./execute.js";
 import { formatParallelResults, formatSingleResult } from "./format.js";
 // agent-manager.js lazy-loaded below to keep subagent tool registration fast
@@ -71,14 +71,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
 
     async execute(
       _id: string,
-      params: {
-        agent?: string;
-        task?: string;
-        tasks?: Array<{ agent?: string; task: string; count?: number; model?: string; cwd?: string }>;
-        model?: string;
-        cwd?: string;
-        async?: boolean;
-      },
+      params: SubagentParams,
       signal: AbortSignal | undefined,
       onUpdate: ((update: SubagentToolResult) => void) | undefined,
       ctx: ExtensionContext,
