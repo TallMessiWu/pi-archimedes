@@ -165,6 +165,19 @@ setWorkingIndicator(options) {
    });
    ```
 
+**Verified blast radius (measured on this tree, so it is a check on your work, not a guess):** with only step 1 + step 2 applied and the assertions untouched, `cd packages/ui && npx vitest run` fails **exactly 6 tests**, all in `src/index.test.ts`, and passes 506:
+
+```
+× configures the header, editor and thinking renderer
+× respects editorSpinBorder: false by leaving pi's indicator running and installing no editor component
+× gives the working row and the thinking label back to pi on shutdown
+× pi's working row and the border spinner > hides pi's working row while the border spinner carries the announcement
+× pi's working row and the border spinner > shows pi's working row, with pi's own indicator, when the spinner is off
+× pi's working row and the border spinner > re-reads the setting for every session, so a replaced session gets the row back
+```
+
+Any *other* failure means the change reached further than planned — stop and reassess rather than editing more tests. After step 3 and step 4 the file is 37 tests (`35 - 0 + 2`), and the whole package is 514. Both new tests were also confirmed RED on `main` before the implementation, with `expected "spy" to be called 1 times, but got 2 times` (#147) and `expected "spy" to not be called at all, but actually been called 2 times` (shutdown), and `npx tsc --noEmit` is clean on the code as dictated.
+
 **Acceptance criteria:**
 - [ ] `setWorkingIndicator` appears nowhere in `packages/ui/src/index.ts` (`grep -c "setWorkingIndicator" packages/ui/src/index.ts` → `0`)
 - [ ] `setWorkingVisible` appears exactly twice in that file, both guarded by `spinFlag` (`grep -n "setWorkingVisible" packages/ui/src/index.ts`)
