@@ -365,9 +365,10 @@ describe("packages/ui lifecycle and registration", () => {
       // plus its own animated indicator) and our border spinner say the same
       // thing — `editorSpinLabel` defaults to "Working" too — so with the spinner
       // on the row is hidden through pi's own API rather than left showing an
-      // indicator-less label.
+      // indicator-less label. The indicator itself is never written: pi's setter
+      // is an unskeyed last-write-wins and belongs to whoever configures it (#147).
       expect(ui.setWorkingVisible).toHaveBeenCalledWith(false);
-      expect(ui.setWorkingIndicator).toHaveBeenCalledWith(undefined);
+      expect(ui.setWorkingIndicator).not.toHaveBeenCalled();
       expect(ui.setEditorComponent).toHaveBeenCalledTimes(1);
       const editorFactory = ui.setEditorComponent.mock.calls[0]![0];
       const editorInstance = editorFactory(fakeTui, { borderColor: (s: string) => s } as EditorTheme, {} as KeybindingsManager);
@@ -428,11 +429,13 @@ describe("packages/ui lifecycle and registration", () => {
 
       triggerStart(ctx);
 
-      // No border spinner, so pi's own working row comes back, looking exactly
-      // like pi's default: visible, with its own animated indicator (omitting the
-      // argument is how pi restores the default frames).
-      expect(ui.setWorkingVisible).toHaveBeenCalledWith(true);
-      expect(ui.setWorkingIndicator).toHaveBeenCalledWith(undefined);
+      // No border spinner, so nothing here touches pi's working row at all: pi's
+      // own row and its own animated indicator stand exactly as pi (and any other
+      // extension) left them. Writing `setWorkingVisible(true)` would un-hide the
+      // row for a user who never asked for it, and for an extension that hid it on
+      // purpose to draw its own spinner (#147).
+      expect(ui.setWorkingVisible).not.toHaveBeenCalled();
+      expect(ui.setWorkingIndicator).not.toHaveBeenCalled();
       expect(ui.setEditorComponent).not.toHaveBeenCalled();
     });
 
@@ -473,7 +476,11 @@ describe("packages/ui lifecycle and registration", () => {
       triggerStart(ctx);
       triggerShutdown(ctx);
 
-      expect(ui.setWorkingIndicator).toHaveBeenLastCalledWith(undefined);
+      // The row was hidden by this session (`editorSpinBorder` defaults to on), so
+      // hiding it is the one thing handed back. The indicator is not: pi resets it
+      // itself before the next session, and our writing it is what overwrote a
+      // sibling extension's spinner in 2.11.1 (#147).
+      expect(ui.setWorkingIndicator).not.toHaveBeenCalled();
       expect(ui.setHiddenThinkingLabel).toHaveBeenLastCalledWith(undefined);
       expect(ui.setWorkingVisible).toHaveBeenLastCalledWith(true);
     });
@@ -482,8 +489,11 @@ describe("packages/ui lifecycle and registration", () => {
     // lives in the editor's own top border and its default label is "Working" as
     // well. With both on screen the word appeared twice, which is what the
     // maintainer's screenshot shows. The setting that decides is
-    // `editorSpinBorder`, and the row is handed back and taken through pi's own
-    // `setWorkingVisible()` — `types.d.ts:88`.
+    // `editorSpinBorder`, and hiding the row goes through pi's own
+    // `setWorkingVisible()` — `types.d.ts:88`. Only that one direction is ours to
+    // write: pi's working-row setters carry no key or scope (`types.d.ts`
+    // `setWorkingIndicator` is a plain assignment, `interactive-mode.js:1831-1837`),
+    // so anything more we assert overwrites whichever extension wrote last (#147).
     describe("pi's working row and the border spinner", () => {
       it("hides pi's working row while the border spinner carries the announcement", () => {
         vi.mocked(loadUIConfig).mockReturnValue({ ...DEFAULT_UI_CONFIG, editorSpinBorder: true });
@@ -493,29 +503,31 @@ describe("packages/ui lifecycle and registration", () => {
         triggerStart(ctx);
 
         expect(ui.setWorkingVisible).toHaveBeenLastCalledWith(false);
-        // No indicator configuration is needed once the row is hidden — and
-        // nothing here asks pi for `frames: []` any more, so the row that *is*
-        // shown (spinner off) is pi's default down to its spinner.
-        expect(ui.setWorkingIndicator).toHaveBeenCalledWith(undefined);
-        expect(ui.setWorkingIndicator).not.toHaveBeenCalledWith({ frames: [] });
+        // Nothing about the indicator is ours to write — neither `frames: []` nor
+        // the `undefined` that means "pi's default spinner". Whoever configures a
+        // spinner owns it; pi restores its own default per session.
+        expect(ui.setWorkingIndicator).not.toHaveBeenCalled();
       });
 
-      it("shows pi's working row, with pi's own indicator, when the spinner is off", () => {
+      it("leaves pi's working row and indicator entirely alone when the spinner is off", () => {
         vi.mocked(loadUIConfig).mockReturnValue({ ...DEFAULT_UI_CONFIG, editorSpinBorder: false });
         const { triggerStart } = setupHarness();
         const { ctx, ui } = makeCtx(true);
 
         triggerStart(ctx);
 
-        expect(ui.setWorkingVisible).toHaveBeenLastCalledWith(true);
-        expect(ui.setWorkingIndicator).toHaveBeenCalledWith(undefined);
+        expect(ui.setWorkingVisible).not.toHaveBeenCalled();
+        expect(ui.setWorkingIndicator).not.toHaveBeenCalled();
       });
 
-      it("re-reads the setting for every session, so a replaced session gets the row back", () => {
-        // pi resets the extension UI on session replacement (`resetExtensionUI()`,
-        // interactive-mode.js:1921 sets `workingVisible = true` again), and the
-        // setting can change between sessions, so the answer has to be read from
-        // the config each time rather than remembered from the first install.
+      it("reads the setting per session and asserts only the direction it asks for", () => {
+        // The setting can change between sessions, so the answer is read from the
+        // config every time rather than remembered from the first install — and
+        // only the `false` direction is ever written. The row coming back is pi's
+        // job, not ours: `resetExtensionUI()` sets `workingVisible = true`
+        // (`interactive-mode.js:1921`) on startup defaults and on every session
+        // replacement and `/reload`, so a spinner-off session needs no handback
+        // from us and cannot be asserted from here.
         vi.mocked(loadUIConfig).mockReturnValue({ ...DEFAULT_UI_CONFIG, editorSpinBorder: true });
         const { triggerStart } = setupHarness();
         const spinnerOn = makeCtx(true);
@@ -525,10 +537,11 @@ describe("packages/ui lifecycle and registration", () => {
         const spinnerOff = makeCtx(true);
         triggerStart(spinnerOff.ctx);
 
-        // Two sessions, two answers: the row went away and came back.
+        // Two sessions, two answers: the row was hidden for the first and left
+        // completely untouched for the second.
         const calls = spinnerOn.ui.setWorkingVisible.mock.calls.map((c) => c[0]);
         expect(calls).toEqual([false]);
-        expect(spinnerOff.ui.setWorkingVisible.mock.calls.map((c) => c[0])).toEqual([true]);
+        expect(spinnerOff.ui.setWorkingVisible.mock.calls.map((c) => c[0])).toEqual([]);
       });
 
       it("hides the row for a session installed on a second pi handle", () => {
@@ -547,6 +560,43 @@ describe("packages/ui lifecycle and registration", () => {
 
         expect(firstCtx.ui.setWorkingVisible).toHaveBeenLastCalledWith(false);
         expect(secondCtx.ui.setWorkingVisible).toHaveBeenLastCalledWith(false);
+      });
+
+      it("leaves a sibling extension's custom working indicator alone (#147)", () => {
+        vi.mocked(loadUIConfig).mockReturnValue({ ...DEFAULT_UI_CONFIG, editorSpinBorder: false });
+        const { pi, listeners } = makePi();
+        const { ctx, ui } = makeCtx(true);
+
+        // Stands in for another extension in `~/.pi/agent/extensions/`: it configures
+        // pi's spinner on session start, and pi gives no key or scoping to that call.
+        // Registered before ours because `setupHarness()` cannot be used here — it
+        // registers ours first — and pi does not sort extension files, so whichever
+        // order `readdirSync` yields is the order the handlers run in.
+        pi.on("session_start", (_event, siblingCtx) => {
+          siblingCtx.ui.setWorkingIndicator({ frames: ["◐"], intervalMs: 80 });
+        });
+        registerUI(pi);
+
+        for (const handler of listeners["session_start"] ?? []) handler(null, ctx);
+
+        // Exactly one call — the sibling's — and nothing of ours after it. Asserting
+        // the count (not just "never called with undefined") is what catches a
+        // handback written as `setWorkingIndicator()` with no argument at all.
+        expect(ui.setWorkingIndicator).toHaveBeenCalledTimes(1);
+        expect(ui.setWorkingIndicator).toHaveBeenCalledWith({ frames: ["◐"], intervalMs: 80 });
+      });
+
+      it("does not assert the working row visible on shutdown when the spinner was never on", () => {
+        vi.mocked(loadUIConfig).mockReturnValue({ ...DEFAULT_UI_CONFIG, editorSpinBorder: false });
+        const { triggerStart, triggerShutdown } = setupHarness();
+        const { ctx, ui } = makeCtx(true);
+
+        triggerStart(ctx);
+        triggerShutdown(ctx);
+
+        // Nothing was taken, so nothing is returned — an unconditional
+        // `setWorkingVisible(true)` here is the second half of the same overwrite bug.
+        expect(ui.setWorkingVisible).not.toHaveBeenCalled();
       });
     });
 
