@@ -20,6 +20,7 @@
  *   instead of truncating.
  */
 
+import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { diag, describeError } from "@pi-archimedes/core/log";
@@ -73,7 +74,7 @@ export function registerFooter(pi: ExtensionAPI): void {
             // --- ours: jj support and the worktree marker have no pi equivalent ---
             const jjBookmark = getJjBookmark();
             const currentBranch = jjBookmark ?? footerData.getGitBranch(); // branch itself is pi's
-            const currentDirectory = process.cwd().split("/").pop() || process.cwd();
+            const currentDirectory = basename(process.cwd()) || process.cwd();
             // jj repos never run git: jj's changed-file count fills the "unstaged" (~N) slot
             const gitStatus = jjBookmark !== null
               ? { staged: 0, unstaged: getJjChangedFiles(), untracked: 0, ahead: 0, behind: 0 }

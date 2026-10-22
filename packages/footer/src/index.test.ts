@@ -1,4 +1,6 @@
+import { posix, win32 } from "node:path";
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { footerIcons } from "./utils/icons.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -76,6 +78,8 @@ let builtFooters: FooterInstance[] = [];
 afterEach(() => {
   for (const footer of builtFooters) footer.dispose();
   builtFooters = [];
+  vi.restoreAllMocks();
+  vi.doUnmock("node:path");
 });
 
 async function loadFooter(options: HarnessOptions = {}): Promise<Harness> {
@@ -171,6 +175,36 @@ async function loadFooter(options: HarnessOptions = {}): Promise<Harness> {
     diagCalls,
   };
 }
+
+describe("footer directory display", () => {
+  it.each([
+    {
+      platform: "Windows",
+      path: win32,
+      directory: "C:\\Users\\example\\project",
+      expected: "project",
+    },
+    { platform: "POSIX", path: posix, directory: "/home/example/project", expected: "project" },
+    { platform: "Windows root", path: win32, directory: "C:\\", expected: "C:\\" },
+    { platform: "POSIX root", path: posix, directory: "/", expected: "/" },
+    {
+      platform: "POSIX backslash",
+      path: posix,
+      directory: "/home/example/my\\project",
+      expected: "my\\project",
+    },
+  ])("shows the directory name for $platform", async ({ path: platformPath, directory, expected }) => {
+    vi.doMock("node:path", async (importOriginal) => {
+      const original = await importOriginal<typeof import("node:path")>();
+      return { ...original, basename: platformPath.basename };
+    });
+    const { factory } = await loadFooter();
+    vi.spyOn(process, "cwd").mockReturnValue(directory);
+    const footer = factory({ requestRender: vi.fn() }, THEME, makeFooterData());
+
+    expect(footer.render(200)[0]?.split(" · ")[0]).toBe(` ${footerIcons.directory}${expected}`);
+  });
+});
 
 describe("footer repaint wiring", () => {
   it("requests a render when a background VCS refresh reports a change", async () => {
