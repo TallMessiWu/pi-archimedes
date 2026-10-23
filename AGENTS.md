@@ -1,187 +1,105 @@
 # AGENTS.md
 
-## Fork branch: `session-name-early`
+本文件约束本 fork 的开发工作。先读本文件和 `README.md`，再修改代码；不要把保留的上游 monorepo 文档当成本分支的安装或发布规则。
 
-This branch is a **standalone Git distribution of session-name**, not the full
-suite. These branch-specific rules supersede conflicting monorepo rules below:
+## 项目定位
 
-- Keep `main` as an upstream mirror; develop and publish Git commits on this branch.
-- The root Pi manifest loads only `packages/session-name/src/index.ts`.
-- Root installation uses npm (as `pi install git:...` does), `package-lock.json`,
-  and a single runtime dependency: `@pi-archimedes/core` via `file:packages/core`.
-  No upstream Archimedes package is fetched from npm. Do not add workspace globs,
-  a pnpm-only preinstall hook, or the full suite entry to the root manifest.
-- The remaining monorepo source is retained for attribution and upstream merges,
-  not installed or loaded. Preserve package subpath imports to the local core.
-- Type-check the shipped naming surface with `npm run typecheck`, then run
-  `npm test` (real Pi loader, mocked providers, no model calls).
-- Root development dependencies target Pi 1.4.0; runtime uses Pi's host aliases.
-  Host peers stay `*`, and production installs omit dev/peer dependencies.
-- Never publish upstream package names to npm. Distribution is this Git branch;
-  upstream's npm release workflow is disabled here.
-- Read the root `README.md` for migration, behavior, tests, and upstream sync.
+- 上游：[danielcherubini/pi-archimedes](https://github.com/danielcherubini/pi-archimedes)。本 fork 基于 v2.11.2 的命名插件修改，保留上游历史、署名和 MIT 许可证。
+- 本仓：[TallMessiWu/pi-archimedes](https://github.com/TallMessiWu/pi-archimedes)。当前开发和 Git 分发分支是 `session-name-early`。
+- 目标：在首条用户输入时启动独立的后台命名请求，不等第一轮回答结束；仅修改会话名字，保留 Pi 原生 `π` 标识和运行转圈。
+- 根包只加载命名插件，不安装或启用整套 Archimedes UI。其余上游源码保留供追溯和同步，不属于当前交付范围。
+- 不依赖上游 Archimedes npm 包。命名代码在本仓，配置和日志助手通过 `file:packages/core` 随 Git checkout 提供。
 
-## Upstream monorepo reference
+## 关键文件
 
-Rules below describe the retained upstream suite, not this branch's root install.
+| 路径 | 用途 |
+| --- | --- |
+| `packages/session-name/src/index.ts` | 首条输入触发、模型选择、命名请求和生命周期保护 |
+| `packages/session-name/src/index.test.mjs` | 真实 Pi loader + mock 模型的回归测试 |
+| `packages/core/src/settings-io.ts`、`log.ts` | 本仓内的配置和日志助手 |
+| `package.json`、`package-lock.json` | 命名插件单独分发入口及依赖锁定 |
+| `scripts/test-production.mjs` | 临时目录内的离线生产安装验证 |
+| `tsconfig.session-name.json` | 当前交付代码的类型检查范围 |
+| `.github/workflows/ci.yml` | Node.js 22/24 上的类型检查、回归和生产安装测试 |
+| `.agents/skills/gitmoji-commit/SKILL.md` | 必须遵循的提交格式及推送权限规则 |
 
-## Monorepo Structure
+## 分支和历史
 
-- `packages/core` — event-channel vocabulary, bridge, chrome, text/color utils, overlay, profiler, settings-io, tool-render
-- `packages/ui` — TUI enhancements: bash tool styling, custom editor, border spinner, thinking collapse, splash animation (depends on core)
-- `packages/ask` — structured question tool with tabbed flow and inline notes (depends on core)
-- `packages/footer` — status bar (depends on core)
-- `packages/diff` — Shiki-powered diff rendering (standalone)
-- `packages/image-paste` — clipboard image paste (depends on core)
-- `packages/subagent` — subagent dispatch with live TUI streaming and cost tracking (depends on core, todo)
-- `packages/todo` — todo list tool with auto-clear and subagent visibility (depends on core)
-- `packages/notify` — delayed desktop notifications with circuit breaker (depends on core)
-- `packages/session-name` — auto session naming (depends on core)
-- `packages/web` — web search and content fetching with multi-provider routing (depends on core)
-- `packages/sudo` — safe privileged execution (sudo_exec tool, masked password prompt, interactive-sudo bash guard) (depends on core)
-- `meta` — orchestrator + composed settings (depends on all twelve)
+- **不在 `main` 开发**。`main` 保持上游镜像；当前修改放在 `session-name-early`，其他独立工作可使用新的功能分支或 worktree。
+- `origin` 是我们的 fork，`upstream` 是原仓。推送时明确指定远端和分支，禁止误推上游。
+- 保留上游提交、标签和作者信息；Gitmoji 规范约束我们新写或整理的提交，不追溯改写继承的上游历史。
+- 同步前先 fetch、检查差异，再按需 merge/cherry-pick。保持命名独立分发入口，不把上游 pnpm workspace 或整套插件入口直接覆盖回来。
+- 不擅自重写已发布历史。用户要求整理历史时可进行本地 amend/reword/rebase，但 force push 必须另行确认。
+- 普通 fast-forward push 无需确认；任何 force push（包括 `--force-with-lease` 或带 `+` 的 refspec）都必须先说明目标、旧/新提交和影响并获批。
+- 获批后使用绑定明确远端旧 SHA 的 lease，只更新获批分支。远端变化或 lease 失败就停下核对，不用无保护的 `--force`，不绕过确认。
 
-## Adding a New Package
+## 提交规范
 
-When a new package is added under `packages/<name>/`, update **all** of these or it will silently break the release / `pi install` flow (this is exactly how `todo` got missed):
+提交前读取 `.agents/skills/gitmoji-commit/SKILL.md`。格式为：
 
-1. **`packages/<name>/package.json`** — must include:
-   - `"version"` matching the shared monorepo version
-   - `"keywords": ["pi-package"]`
-   - `"files": ["src"]`
-   - `"pi": { "extensions": ["./src/index.ts"] }` ← **required**; without it, standalone `pi install @pi-archimedes/<name>` loads nothing
-   - Internal deps as `"@pi-archimedes/core": "workspace:*"` (pnpm rewrites this to a real version at publish time)
-   - `peerDependencies` for `@earendil-works/pi-coding-agent` / `pi-tui` / `pi-ai` as needed
-2. **`meta/package.json`** — add `"@pi-archimedes/<name>": "workspace:*"` to `dependencies`
-3. **`meta/src/index.ts`** — import and register the new package's entry, gated by `isPluginEnabled("<name>")` (the single global gate from `meta/src/plugins.ts`)
-4. **`meta/src/plugins.ts`** — add the package to the `PLUGINS` manifest (`id`, `label`, `description`, `namespace` (e.g. `archimedes.<newkey>`), `load()`). A manifest entry is required: registration alone is not enough — the gate, `/archimedes` settings items, and shutdown all key off the manifest, and a missing entry means the package also disappears from the `/plugins` menu. (There is no `defaultEnabled` any more — the manifest entry carries the settings-namespace key the gate reads, and no plugin is off-by-default today.)
-5. **npm trusted publishing** — on npmjs.com, add a Trusted Publisher for `@pi-archimedes/<name>`: package page → **Access** → *Trusted Publishing* → add a GitHub Actions publisher for repo `danielcherubini/pi-archimedes`, workflow `.github/workflows/release.yml`. There is **no CLI for this**, and it is **per package** — an existing org/scope setting does not cover a new package. Skip it and the release workflow's `--provenance` publish dies with `ERR_PNPM_AUTH_TOKEN_EXCHANGE … 404` followed by a bare `{"error":"Not found"}`, which reads like a transient registry outage but is not: npm 404s the OIDC token exchange when the package has no matching trusted publisher. Do this **before** the first release that includes the package — `ui` and `web` were both missed, so their versions had to be hand-published without provenance.
-6. **`.github/workflows/release.yml`** — add `@pi-archimedes/<name>` to the `ORDER` list in the "Publish to npm" step, placed after its internal deps and before `meta`, and to the package list in the "Verify all packages are on npm" step
-7. **`AGENTS.md`** — add to the Monorepo Structure list; bump the "all N package versions" count and the "N package directories" type-check count in Release Steps; add the package to the publish-order line
-8. **`README.md`** — add a feature section, a line in the monorepo layout tree, a `pi install @pi-archimedes/<name>` line under "install selectively", and a settings-table entry if it has settings
-
-> A package missing from **both** lists above is invisible to CI: it will never publish and nothing fails to say so.
-
-### Publishing a new package safely
-
-- Always publish via the release workflow (`git tag v...`), which uses `pnpm publish`.
-- The publish step skips versions already on npm and retries transient failures, so a **failed run can be re-run safely** (`gh run rerun <id>`) once the cause is fixed — already-published packages are skipped, not re-published. The "Verify all packages are on npm" step is the real gate on whether a release shipped.
-- **Publish order matters for `meta`:** `pi-archimedes` pins every component to an exact version, so if any component fails to publish, `meta` is left with an unsatisfiable dependency and `npm install pi-archimedes@<v>` fails with `ETARGET`. Don't consider a release done until the verify step is green.
-- **Never** `npm publish` a workspace package directly — npm does **not** rewrite `workspace:*`, so the leaked protocol spec breaks `pi install` (npm) with `Unsupported URL Type "workspace"`. This is what happened to `todo@1.2.0`.
-- If you must publish manually, use `pnpm publish --no-git-checks --access public` from the package directory (it rewrites `workspace:*` → real version) and provide `--otp=<code>` if 2FA is enabled.
-
-## Conventions
-
-### Package Manager
-- This is a **pnpm workspace** — always use `pnpm install`, never `npm install`
-- `packageManager` field in root `package.json` pins pnpm via Corepack
-- `workspace:*` protocol in dependencies is pnpm-specific; npm cannot parse it
-- `.npmrc` sets `package-manager-strict=true` and `manage-package-manager-versions=true`
-
-### Imports
-- **Within a package:** always relative paths (e.g., `from "../chrome.js"`)
-- **Cross-package:** use package subpath exports (e.g., `from "@pi-archimedes/core/events"`)
-- **Never** import `../utils/...` — those barrels were dissolved into `text.ts` and `color.ts`
-
-### Config
-- Each package reads its own namespace in `~/.pi/agent/settings.json`
-- Core: `archimedes.core`, Footer: `archimedes.footer`, Diff: `archimedes.diff`, Session-name: `archimedes.sessionName`
-- Plugin on/off: a non-core package's namespace may carry a suite-managed `enabled` boolean (default on when absent). **Only meta reads/writes it**, via `/plugins` (`isPluginEnabled` / `setPluginEnabled` in `meta/src/plugins.ts`, ADR 0012). Package code must never read it as a runtime guard, and it never appears in a package's own settings items — except the first-run keybinding offer (image-paste gate 1, plan-approved 2026-09-11, see ADR 0012 Exception), which runs from the meta `session_start` handler before plugin registration and must read the flag directly to honour a plugin-off toggle
-- No migration from old `hephaestus` keys
-
-### No Build Step
-- All packages use `"type": "module"` with `.ts` entry points
-- Pi's jiti loader handles TypeScript at runtime
-- Verification is `tsc --noEmit`, not a build or test command
-
-### Type-Check Target: pi 1.2.0 (and the `@types/node` hold)
-- Every one of the 13 manifests pins `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` in **`devDependencies` to the exact string `"1.2.0"`** — not a range. The four packages that declare `@earendil-works/pi-ai` pin it to `"1.2.0"` too. Ranges are wrong here on purpose: caret on an 0.x (`^0.87.0`) cannot even resolve `0.87.1`, and the suite once type-checked eleven releases behind what users ran.
-- This is a **compile-time** pin only. At runtime pi aliases every host specifier to its own copy (ADR 0026), so the workspace `node_modules` copy is never what executes. `typescript` stays where it is (root `^7.0.2`, packages `^6.0.x`).
-- **`@types/node` is held at `22.19.19`** — pinned exactly in root `devDependencies` (which is what makes `packages/core`'s hoisted `node:fs` compile deterministically) and declared in `packages/subagent` and `packages/web`. Do **not** "modernise" it to 26.x: pi 1.2.0 bundles `@types/node` 26.6.5, where `ChildProcess extends InternalEventEmitter<ChildProcessEventMap>`, and if both copies land in one program you get three false `Property 'on' does not exist on type 'ChildProcessWithoutNullStreams'` errors — `packages/image-paste/src/clipboard.ts` and `packages/sudo/src/tool.ts` — that read exactly like real upstream breakage. Check with `pnpm why @types/node | grep -o "2[0-9]\.[0-9]*\.[0-9]*" | sort -u` (exactly one version). The pin will look stale to a future contributor; that is why it is written down here and in ADR 0026.
-
-### Two Never-Do Rules (suite-wide, mechanically guarded)
-1. **Never decide a colour by parsing an escape string — ask the theme for a token.** A theme token may be `""` (terminal default), which `Theme.getBgAnsi()` renders as `\x1b[49m`: a **truthy** string, so `getBgAnsi(k) ?? FALLBACK` never falls back, and a `38;2;`-only parser returns a near-black slab instead of "no colour" — which is how black editor borders on a light terminal got shipped. Read the token (`theme.colors[token]`, `theme.style(...)`), read `theme.appearance` for light/dark, and treat a terminal-default token as *no colour* (`isTerminalDefault()` / `NO_PANEL_COLOR` in `packages/core/src/chrome.ts`). Producers stay exempt — emitting `38;2;`/`48;2;` codes and `packages/diff/src/ansi/`'s decoder are not decisions. Full wording: `docs/features/ui.md`.
-2. **Never `console.*` from a render or event path — use `core/log`'s `diag`.** On fullscreen screen a stray write lands inside the differential frame and smears the viewport until the next full redraw; inside a subagent child every non-JSON stdout line is discarded by the reader. Developer diagnostics go to `diag(scope, msg)` / `describeError(err)` (file sink, `$PI_ARCHIMEDES_LOG`, silent when unset); anything the user must act on goes to `ctx.ui.notify`. Guards: `packages/core/src/log-discipline.test.ts` matches **every** `console.<method>(` and its allow-list is `packages/core/src/log.ts` alone — if you widen it, the entry must name the task that removes it. `packages/diff` keeps a sibling copy because it is standalone.
-
-### Peer Floors Are Documentation, Not Protection
-- `pi install` omits peers (`--legacy-peer-deps` / `--omit=peer`) and the loader aliases host packages, so a published range is **never installed, solved, parsed or warned about**; `>=0.1.0` and `*` are byte-for-byte equivalent at install time (ADR 0026). The mechanism that can actually reach a user is `reportPiSupport(pkg, min)` (`packages/core/src/pi-support.ts`, sibling copy in `packages/diff`), which compares against the running pi's `VERSION` and warns without refusing to register.
-- Because the pi family is published in lockstep (one train, one install), **all pi peers a package declares carry that package's single floor** — a host that has `pi-coding-agent@1.2.0` has `pi-tui@1.2.0` with it. A floor is the oldest published train whose declarations provide every host symbol the shipped (non-test) code touches at runtime; a symbol reached *optionally* (`getFilePaths?.()`) or behind a documented fallback (`pi.getSettings` in `core/src/settings-io.ts`) does not raise one, and those guards are load-bearing, not incidental.
-- `0.1.0` was **never published** for `pi-coding-agent`, `pi-tui` or `pi-ai` (their oldest releases are `0.74.0`), so `>=0.1.0` asserts nothing about a real host. It survives in ADR 0013 as the marker for a *types-only* package; no package in this suite is types-only today, which is why none of them carry it any more.
-
-### Verification Order (run independently, wait for each)
-1. `npx tsc --noEmit` in the package directory
-2. If it fails: read the error → read the relevant file → fix → re-run
-3. Loop-break: if a check fails twice without edits between, stop and report BLOCKED
-
-### CI: the floor job and the floating `pi@latest` job
-`.github/workflows/ci.yml` has two jobs, and they answer different questions:
-- **`typecheck`** — the floor job: `pnpm install --frozen-lockfile`, `pnpm -r exec -- tsc --noEmit`, `pnpm test`, against *our* pinned 1.2.0. Red means our tree stopped compiling or stopped working.
-- **`pi-latest`** — the drift detector: same compile surface after `pnpm update -r` against whatever `@earendil-works/pi-*@latest` publishes today (with `minimum-release-age 0` set in the runner's project config, because pnpm's 24h policy would otherwise reject the newest pi for its first day — exactly the window the job covers). pi does not follow semver (`patch` and `minor` both ship breaking changes), so this job is the only drift detector available.
-- **`pi-latest` is gated to `schedule` and `workflow_dispatch`**, deliberately: a float job that ran on PRs would turn every open PR red for a reason the author cannot fix. So **`pi-latest` showing *SKIPPED* on a pull request is the expected result, not a failure.** To run it on demand: `gh workflow run ci.yml --ref <branch>` (`workflow_dispatch` also lets anyone re-check against today's latest on `main`).
-
-### Commits
-- `chore:` for infra (workflows, config, README)
-- `feat:` for new features or packages
-- `fix:` for bug fixes
-- Always commit per logical unit — don't batch unrelated changes
-
-### Documentation Structure
-Docs follow the skill-suite layout (`specify`/`finish` conventions):
-- **Plans** live in `docs/roadmap/<feature>.md` (kebab-case, named for the outcome) with front-matter `status` (`considering` / `committed`) + `done-when`. Only *unfinished* plans live on disk — the doc is **deleted when the feature ships** (history lives in git; no plan index, no `done/` graveyard). Supersede: note it in the old doc's body, then delete it.
-- **Persistent knowledge** goes to `docs/features/<feature>.md` (present-tense, front-matter `status: live` + `last-verified`) or `docs/decisions/NNNN-slug.md` — never left in a plan.
-- `docs/research/` holds research reports (front-matter, kebab-cased `docs/research/<topic>.md`); `docs/reviews/` holds code-review write-ups.
-- Use the `specify` skill to generate plans (spec input from the `discuss` conversation), then dispatch the `reviewer` subagent to review the plan against the codebase. **Commit the plan file to git** — it is untracked by default and would be lost.
-
-### Event Handlers
-- Register `session_shutdown` handlers at the top level of `register()`, NOT inside `session_start`
-- Nested registration causes handler accumulation on `/reload`
-
-### Source Files
-- Pi loads `.ts` files directly — publish `src/` in `"files"` field
-- ANSI escape sequences use `\x1b` with semicolons (e.g., `\x1b[38;2;255;215;0m`)
-- Common pitfall: commas instead of semicolons in truecolor ANSI codes
-
-## Testing Locally
-
-Symlink monorepo root into pi extensions:
-```bash
-ln -s $(pwd) ~/.pi/agent/extensions/pi-archimedes
+```text
+<emoji-code> <type>(<scope>): <中文 subject>
 ```
-Root `package.json` has `pi.extensions` pointing to `meta/src/index.ts`.
 
-## Publishing
+- 使用 Gitmoji 代码，例如 `:sparkles:`、`:bug:`、`:memo:`、`:robot:`，不用实际 emoji 字符替代代码。
+- Subject 使用中文、动词开头、最多 50 个字符；type/scope 使用简短英文。
+- 根据主要意图选择最准确的 Gitmoji/type，按逻辑单元提交。一般只用一个 `-m`，不堆砌无必要的正文。
+- **不要求用户确认提交信息或普通提交**；完成必要验证后直接提交。普通 push 同样不确认，只有 force push 需要确认。
+- 暂存前后检查 diff，只提交本任务相关文件，不覆盖、撤销或夹带用户已有改动。
 
-- All packages share the same version (bump all together)
-- `git tag v0.x.y && git push origin v0.x.y` triggers the release workflow
-- Publishes in dependency order: core → ui → sudo → ask → todo → notify → session-name → footer → diff → image-paste → subagent → web → meta
+示例：
 
-## Release Steps
+```sh
+git commit -m ":sparkles: feat(session-name): 支持首条输入后台命名"
+git commit -m ":memo: docs(readme): 补充修改说明和安装命令"
+git commit -m ":robot: chore(agent): 完善项目约定和提交规范"
+```
 
-When releasing a new version, apply these steps after bumping versions but before tagging:
+## 安装、依赖和发布
 
-1. **Bump all 13 package versions** — `packages/core`, `packages/ui`, `packages/sudo`, `packages/ask`, `packages/footer`, `packages/diff`, `packages/image-paste`, `packages/notify`, `packages/subagent`, `packages/todo`, `packages/session-name`, `packages/web`, `meta` all share the same version. The root `package.json` is private and has no version to bump.
+- 安装方式以根 README 为准，必须使用 fork 的命名分支：
+  `pi install git:github.com/TallMessiWu/pi-archimedes@session-name-early`。
+- 根目录使用 **npm + package-lock.json**，不是上游 pnpm workspace。不要添加 `workspace:*`、全仓 workspaces 或仅允许 pnpm 的 preinstall 钩子。
+- 根 Pi manifest 只能指向 `packages/session-name/src/index.ts`；不要改回 `meta/src/index.ts`，不要把开发用 skill 分发为插件资源。
+- 保留跨包 subpath imports（如 `@pi-archimedes/core/log`），由本地 core 依赖解析；禁止引用用户机器上旧 npm 安装或已删除的本地补丁。
+- Pi host 包由运行中的 Pi 提供。peerDependencies 使用 `*`，不要放入生产 dependencies；根开发依赖当前固定 Pi 1.4.0，`@types/node` 固定 22.19.19。
+- core 的开发依赖由根包管理，不在 `packages/core/package.json` 恢复 host devDependencies：npm 安装 `file:` 依赖时，即便 `--omit=dev` 也曾引入嵌套 host，必须用生产安装测试防回归。
+- Pi 直接加载 TypeScript，无需编译发布。根包为 private，仅通过 Git 分发；不恢复上游 npm 发布 workflow，不向上游包名发布。
+- 未获用户要求，不操作真实 `~/.pi/agent/settings.json`、凭据或插件安装；安装验证使用临时 `PI_CODING_AGENT_DIR`。
 
-2. **Type-check all packages** — run `npx tsc --noEmit` in each of the 12 package directories (11 components + session-name). Don't release if any check fails.
+## 必须保留的行为
 
-3. **Ensure CI is green** — check the latest CI run on `feature/monorepo-split` (or `main`). Don't release on a red build.
+- `input` 处理器不能等待命名模型完成，同一运行时最多一个命名请求。
+- 使用首条用户文本，最多 500 字符；恢复未命名会话时优先取原始用户消息，不依赖助手回答。
+- 已有名字直接跳过；结果落地前再次检查，不能覆盖请求期间设置的手动名字。
+- `session_shutdown` 取消请求；状态、signal、session ID 防止旧结果污染新会话。生命周期 handler 顶层注册，不在 `session_start` 内重复注册。
+- 只使用 `pi.setSessionName`，不接管终端标题、转圈或 working indicator，不额外添加忙闲字符。
+- 保留 `archimedes.sessionName` 配置。模型默认跟随当前模型，reasoning 默认 `minimal`，校验后按模型能力 clamp。
+- 失败只在后续用户输入时重试，三次失败后停止并至多警告一次；取消、缺模型/认证不消耗失败次数。
+- 标题限制 80 个 Unicode code points。跳过空白/纯图片、extension 来源输入和不持久化会话。
+- 事件路径不用 `console.*`，诊断走 `diag`/`describeError`，需要用户处理的消息走 `ctx.ui.notify`。
+- README 明确命名是独立且可能计费的模型调用，不计入主 footer totals；不要承诺标题一定早于主回答完成。
 
-4. **Tag and push** — use annotated tag with `v` prefix: `git tag -a v0.x.y -m "Release v0.x.y"` then `git push origin v0.x.y`. The release workflow handles publishing to npm.
+## 验证流程
 
-5. **Create the GitHub Release** — after tagging, create a release with notes summarizing user-facing changes since the previous tag (gather them with `git log v<prev>..v<cur>`): `gh release create v0.x.y --title "v0.x.y" --target main --notes "..."`. Backfill releases for any tags that were skipped. Edit with `gh release edit v0.x.y --notes "..."` if the notes need fixing after the fact.
+在仓库根目录安装开发依赖并按顺序验证：
 
-### Writing release notes
+```sh
+npm ci --ignore-scripts --legacy-peer-deps
+npm run typecheck
+npm test
+npm run test:production
+git diff --check
+```
 
-Structure (in this order):
+- 回归测试使用真实 Pi loader 和 mock 模型，不调用真实模型，不读取真实凭据。
+- 生产测试在临时目录执行 npm offline 安装，省略 dev/peer，确认只装本地 core，并运行同一套回归测试。
+- 涉及安装/资源发现/更新时，额外用隔离 Pi 配置检查真实命令，不把沙箱成功描述为用户环境已迁移。
+- 检查失败先读错误并修复；不跳过失败，也不在没有修改时反复重跑。区分本地通过与远端 CI 通过。
 
-1. **Headline first** — anything new/structural leads its own `##` section (e.g. "New package: ..."), before per-package diffs
-2. **`## Other changes`** — one bullet per package, bold package name, user-visible behavior only
-3. **`## Thanks to contributors`** — credit external contributors only, with their contribution linked
+## 范围和文档
 
-Rules:
-
-- **Link every change** to its PR (`#31` — GitHub auto-links PR refs in release bodies) or, for work pushed directly to `main`, its commit as a **full URL** (bare SHAs don't auto-link: `https://github.com/danielcherubini/pi-archimedes/commit/<sha7>`)
-- **Gather contributors** with `git log v<prev>..v<cur> --pretty='%an|%h|%s'` and cross-check PRs with `gh pr list --state merged --json number,title,author`
-- **Never thank the maintainer** (the repo owner) — the thanks section is for external contributors only
-- **Don't mention internal reference projects** the work was ported from or benchmarked against — release notes describe what the user gets, not the lineage
-- **No internal jargon** — describe user-visible behavior; plan numbers are fine in passing ("plan 028") but never as the headline
-- Keep bullets to one or two lines apiece
+- 做最小必要修改，不顺手重构或删除未交付的其他上游包。
+- 修改行为、配置或安装方式时同步 README 和相关功能文档，明确区分 fork 与原插件。
+- 原仓完整 monorepo 约定可通过 `git show upstream/main:AGENTS.md` 查阅；它不覆盖本文件，也不作为本分支的发布步骤。
+- 完成后简要报告变更、验证、提交和推送状态。若 force push 尚未获批，明确说明远端尚未同步。
