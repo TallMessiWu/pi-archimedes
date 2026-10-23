@@ -1,25 +1,42 @@
 {
-  "name": "pi-archimedes-monorepo",
+  "name": "@tallmessiwu/pi-session-name-early",
+  "version": "1.0.0",
   "private": true,
-  "workspaces": [
-    "packages/*",
-    "meta"
-  ],
+  "description": "Name Pi sessions on first input, without replacing Pi's terminal title or progress",
+  "license": "MIT",
   "type": "module",
-  "packageManager": "pnpm@12.5.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TallMessiWu/pi-archimedes.git"
+  },
+  "keywords": ["pi-package"],
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
-    "preinstall": "node -e \"if (!/pnpm/.test(process.env.npm_execpath || '')) { console.error('\\n  This project uses pnpm. Please use: pnpm install\\n'); process.exit(1); }\"",
-    "test": "vitest run"
+    "test": "node --test packages/session-name/src/index.test.mjs",
+    "test:production": "node scripts/test-production.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.session-name.json"
   },
   "pi": {
-    "extensions": [
-      "meta/src/index.ts"
-    ]
+    "extensions": ["packages/session-name/src/index.ts"],
+    "skills": [],
+    "prompts": [],
+    "themes": []
+  },
+  "dependencies": {
+    "@pi-archimedes/core": "file:packages/core"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
     "@types/node": "22.19.19",
-    "fast-check": "^4.0.0",
-    "typescript": "^7.0.2",
-    "vitest": "^3.0.0"
+    "typescript": "^6.0.0"
   }
 }

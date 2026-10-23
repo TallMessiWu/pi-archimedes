@@ -1,6 +1,29 @@
 # AGENTS.md
 
-Rules for AI agents working on this monorepo.
+## Fork branch: `session-name-early`
+
+This branch is a **standalone Git distribution of session-name**, not the full
+suite. These branch-specific rules supersede conflicting monorepo rules below:
+
+- Keep `main` as an upstream mirror; develop and publish Git commits on this branch.
+- The root Pi manifest loads only `packages/session-name/src/index.ts`.
+- Root installation uses npm (as `pi install git:...` does), `package-lock.json`,
+  and a single runtime dependency: `@pi-archimedes/core` via `file:packages/core`.
+  No upstream Archimedes package is fetched from npm. Do not add workspace globs,
+  a pnpm-only preinstall hook, or the full suite entry to the root manifest.
+- The remaining monorepo source is retained for attribution and upstream merges,
+  not installed or loaded. Preserve package subpath imports to the local core.
+- Type-check the shipped naming surface with `npm run typecheck`, then run
+  `npm test` (real Pi loader, mocked providers, no model calls).
+- Root development dependencies target Pi 1.4.0; runtime uses Pi's host aliases.
+  Host peers stay `*`, and production installs omit dev/peer dependencies.
+- Never publish upstream package names to npm. Distribution is this Git branch;
+  upstream's npm release workflow is disabled here.
+- Read the root `README.md` for migration, behavior, tests, and upstream sync.
+
+## Upstream monorepo reference
+
+Rules below describe the retained upstream suite, not this branch's root install.
 
 ## Monorepo Structure
 
