@@ -4,6 +4,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { loadConfig } from "@pi-archimedes/core/settings-io";
 import { diag, describeError } from "@pi-archimedes/core/log";
 import type { SettingItem } from "@earendil-works/pi-tui";
+import { preserveTerminalTitle } from "./terminal-title.js";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -108,7 +109,8 @@ export function registerSessionName(pi: ExtensionAPI) {
   }
   let state = newState();
 
-  pi.on("session_start", () => {
+  pi.on("session_start", (event, ctx) => {
+    if (event.reason === "startup" && ctx.mode === "tui") preserveTerminalTitle();
     state.active = false;
     state.pending?.abort();
     state = newState();

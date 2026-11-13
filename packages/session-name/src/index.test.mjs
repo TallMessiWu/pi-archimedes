@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { spawnSync } from "node:child_process";
 
 // Use Pi's real extension loader, but never real credentials or model requests.
 const agentDir = process.env.PI_TEST_AGENT_DIR ?? join(homedir(), ".pi/agent");
@@ -40,6 +41,7 @@ async function harness({ name, branch = [], persistent = true, auth = true, sett
   loaded.runtime.setSessionName = title => { name = title; names.push(title); };
   const ctx = {
     hasUI: true,
+    mode: "tui",
     model: { id: "main", provider: "test", reasoning: true },
     sessionManager: {
       getSessionFile: () => persistent ? "/test/session.jsonl" : undefined,
@@ -66,7 +68,7 @@ async function harness({ name, branch = [], persistent = true, auth = true, sett
     const results = (extension.handlers.get(type) ?? []).map(fn => fn({ type, ...data }, ctx));
     for (const result of results) assert.equal(result, undefined, "Handlers must not await naming");
   }
-  emit("session_start");
+  emit("session_start", { reason: "startup" });
   return { calls, names, notices, ctx, extension, runtime: loaded.runtime, emit,
     input: (text = "实现首次输入后立即命名", source = "interactive") => emit("input", { text, source }),
     rename: title => { name = title; },
@@ -323,4 +325,101 @@ test("Pi's native title formatter preserves π and does not touch terminal progr
     ui: { terminal: { setTitle: title => titles.push(title), setProgress: () => assert.fail("Progress changed") } },
   });
   assert.deepEqual(titles, ["π - 测试标题 - project"]);
+});
+
+const PUSH_TITLE = "\x1b[22;0t";
+const POP_TITLE = "\x1b[23;0t";
+const NATIVE_TITLE = "\x1b]0;π - 测试标题 - project\x07";
+
+function titleLifecycle(options = {}, term = "xterm-256color") {
+  const result = spawnSync(process.execPath, [
+    fileURLToPath(new URL("./fixtures/terminal-title.mjs", import.meta.url)),
+    host, entry, JSON.stringify(options),
+  ], { encoding: "utf8", timeout: 30_000, env: { ...process.env, TERM: term } });
+  assert.ifError(result.error);
+  assert.equal(result.status, options.exitCode ?? 0, result.stderr);
+  assert.equal(result.stderr, "");
+  return result.stdout;
+}
+
+// Minimal title-stack emulator: the old Unicode title stays inside the terminal,
+// and no OSC query/reply or input interception is needed by the extension.
+function replayTitle(output, initialTitle) {
+  const stack = [];
+  let title = initialTitle;
+  for (const match of output.matchAll(/\x1b\[(22|23);0t|\x1b\]0;([^\x07]*)\x07/g)) {
+    if (match[1] === "22") stack.push(title);
+    else if (match[1] === "23") {
+      assert.ok(stack.length, "Must not pop without a matching save");
+      title = stack.pop();
+    } else title = match[2];
+  }
+  assert.equal(stack.length, 0, "Title stack must be balanced");
+  return title;
+}
+
+test("saves before Pi's first native title and restores after all shutdown handlers", () => {
+  const output = titleLifecycle();
+  assert.equal(output, PUSH_TITLE + NATIVE_TITLE
+    + "\x1b]0;late shutdown title\x07<before-exit>" + POP_TITLE);
+  assert.equal(replayTitle(output, "原来的 tab 🚀"), "原来的 tab 🚀");
+});
+
+test("keeps one original title and one exit listener across reloads and session replacements", () => {
+  const output = titleLifecycle({
+    replacements: ["reload", "new", "resume", "fork", "reload"], repeatStartup: true,
+  });
+  assert.equal(output.split(PUSH_TITLE).length - 1, 1);
+  assert.equal(output.split(POP_TITLE).length - 1, 1);
+  assert.equal(output.split(NATIVE_TITLE).length - 1, 6);
+  assert.ok(output.endsWith("<before-exit>" + POP_TITLE));
+  assert.equal(replayTitle(output, "shell title"), "shell title");
+});
+
+test("process exit restores even without session shutdown (crash or unloaded extension)", () => {
+  const output = titleLifecycle({ skipShutdown: true, exitCode: 7 });
+  assert.equal(output, PUSH_TITLE + NATIVE_TITLE + "<before-exit>" + POP_TITLE);
+});
+
+for (const mode of ["rpc", "json", "print"]) {
+  test(`does not emit title-stack controls in ${mode} mode, even with TTY streams`, () => {
+    const output = titleLifecycle({ mode, expectedListeners: 0 });
+    assert.ok(!output.includes(PUSH_TITLE));
+    assert.ok(!output.includes(POP_TITLE));
+  });
+}
+
+for (const options of [{ stdinTTY: false }, { stdoutTTY: false }]) {
+  test(`does not save or restore with non-TTY streams: ${JSON.stringify(options)}`, () => {
+    const output = titleLifecycle({ ...options, expectedListeners: 0 });
+    assert.ok(!output.includes(PUSH_TITLE));
+    assert.ok(!output.includes(POP_TITLE));
+  });
+}
+
+test("does not use the title stack with TERM=dumb", () => {
+  const output = titleLifecycle({ expectedListeners: 0 }, "dumb");
+  assert.ok(!output.includes(PUSH_TITLE));
+  assert.ok(!output.includes(POP_TITLE));
+});
+
+for (const startReason of ["reload", "new", "resume", "fork"]) {
+  test(`first loaded on ${startReason} does not mistake Pi's current title for the original`, () => {
+    const output = titleLifecycle({ startReason, expectedListeners: 0 });
+    assert.ok(!output.includes(PUSH_TITLE));
+    assert.ok(!output.includes(POP_TITLE));
+  });
+}
+
+test("a failed save does not register a restore or disrupt session startup", () => {
+  const output = titleLifecycle({ failSave: true, expectedListeners: 0 });
+  assert.ok(output.startsWith(NATIVE_TITLE));
+  assert.ok(!output.includes(PUSH_TITLE));
+  assert.ok(!output.includes(POP_TITLE));
+});
+
+test("a failed restore does not change the process exit code", () => {
+  const output = titleLifecycle({ failRestore: true, exitCode: 7 });
+  assert.ok(output.startsWith(PUSH_TITLE + NATIVE_TITLE));
+  assert.ok(output.endsWith("<before-exit>"));
 });
