@@ -6,7 +6,7 @@
 
 - 上游：[danielcherubini/pi-archimedes](https://github.com/danielcherubini/pi-archimedes)。本 fork 基于 v2.11.2 的命名插件修改，保留上游历史、署名和 MIT 许可证。
 - 本仓：[TallMessiWu/pi-archimedes](https://github.com/TallMessiWu/pi-archimedes)。当前开发和 Git 分发分支是 `session-name-early`。
-- 目标：在首条用户输入时启动独立的后台命名请求，不等第一轮回答结束；运行中仅修改会话名字，保留 Pi 原生 `π` 标识和运行转圈；进入时保存终端标题，退出进程时恢复。
+- 目标：在首条用户输入时启动独立的后台命名请求，不等第一轮回答结束；运行中仅修改会话名字，保留 Pi 原生 `π` 标识和运行转圈；退出进程时按终端能力恢复原标题或固定初始标题。
 - 根包只加载命名插件，不安装或启用整套 Archimedes UI。其余上游源码保留供追溯和同步，不属于当前交付范围。
 - 不依赖上游 Archimedes npm 包。命名代码在本仓，配置和日志助手通过 `file:packages/core` 随 Git checkout 提供。
 
@@ -15,7 +15,7 @@
 | 路径 | 用途 |
 | --- | --- |
 | `packages/session-name/src/index.ts` | 首条输入触发、模型选择、命名请求和生命周期保护 |
-| `packages/session-name/src/terminal-title.ts` | 交互式启动时保存标题栈、退出进程时恢复 |
+| `packages/session-name/src/terminal-title.ts` | 交互式标题生命周期；标题栈恢复及 Windows Terminal 初始标题重置 |
 | `packages/session-name/src/index.test.mjs` | 真实 Pi loader + mock 模型及标题生命周期的回归测试 |
 | `packages/core/src/settings-io.ts`、`log.ts` | 本仓内的配置和日志助手 |
 | `package.json`、`package-lock.json` | 命名插件单独分发入口及依赖锁定 |
@@ -75,7 +75,8 @@ git commit -m ":robot: chore(agent): 完善项目约定和提交规范"
 - 已有名字直接跳过；结果落地前再次检查，不能覆盖请求期间设置的手动名字。
 - `session_shutdown` 取消请求；状态、signal、session ID 防止旧结果污染新会话。生命周期 handler 顶层注册，不在 `session_start` 内重复注册。
 - 运行中的命名只使用 `pi.setSessionName`，不接管终端标题、转圈或 working indicator，不额外添加忙闲字符。
-- 标题恢复仅在 TUI 首次 `session_start`、原生标题设置前压栈，并在进程 `exit` 同步出栈；跨 reload、切换会话或卸载保留进程级标记，不在 `session_shutdown` 提前恢复。不查询/读取标题内容，不向非 TTY 或 RPC/JSON/print 输出控制序列。
+- 标题恢复仅在 TUI 首次 `session_start`、原生标题设置前建立进程级策略：普通终端压栈并在 `exit` 同步出栈；Windows Terminal（`WT_SESSION`）不使用它不支持的标题栈，退出时发送空 OSC 0 恢复终端保留的初始标题。跨 reload、切换会话或卸载保留标记，不在 `session_shutdown` 提前恢复。不查询/读取标题内容，不向非 TTY 或 RPC/JSON/print 输出控制序列。
+- Windows Terminal 的初始固定标题重置不等于捕获任意 Shell 动态原标题，README 和报告必须区分。不能只凭控制序列发送/模拟器测试通过就宣称宿主终端支持恢复；兼容性修复需要核对终端实现或验证实际对应 tab，不能用可能来自其他 tab 的活动窗口标题冒充结果。
 - 保留 `archimedes.sessionName` 配置。模型默认跟随当前模型，reasoning 默认 `minimal`，校验后按模型能力 clamp。
 - 失败只在后续用户输入时重试，三次失败后停止并至多警告一次；取消、缺模型/认证不消耗失败次数。
 - 标题限制 80 个 Unicode code points。跳过空白/纯图片、extension 来源输入和不持久化会话。

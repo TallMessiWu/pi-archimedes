@@ -12,7 +12,9 @@ Object.defineProperty(process.stdout, "isTTY", { value: options.stdoutTTY ?? tru
 const write = fs.writeSync;
 fs.writeSync = (fd, data, ...args) => {
   if ((options.failSave && data === "\x1b[22;0t")
-    || (options.failRestore && data === "\x1b[23;0t")) throw new Error("Mock tty failure");
+    || (options.failRestore && (data === "\x1b[23;0t" || data === "\x1b]0;\x07"))) {
+    throw new Error("Mock tty failure");
+  }
   return write(fd, data, ...args);
 };
 syncBuiltinESMExports();

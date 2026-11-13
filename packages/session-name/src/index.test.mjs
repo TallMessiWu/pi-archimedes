@@ -329,13 +329,17 @@ test("Pi's native title formatter preserves π and does not touch terminal progr
 
 const PUSH_TITLE = "\x1b[22;0t";
 const POP_TITLE = "\x1b[23;0t";
+const RESET_WINDOWS_TITLE = "\x1b]0;\x07";
 const NATIVE_TITLE = "\x1b]0;π - 测试标题 - project\x07";
 
 function titleLifecycle(options = {}, term = "xterm-256color") {
   const result = spawnSync(process.execPath, [
     fileURLToPath(new URL("./fixtures/terminal-title.mjs", import.meta.url)),
     host, entry, JSON.stringify(options),
-  ], { encoding: "utf8", timeout: 30_000, env: { ...process.env, TERM: term } });
+  ], {
+    encoding: "utf8", timeout: 30_000,
+    env: { ...process.env, TERM: term, WT_SESSION: options.windowsTerminal ? "test-windows-terminal" : "" },
+  });
   assert.ifError(result.error);
   assert.equal(result.status, options.exitCode ?? 0, result.stderr);
   assert.equal(result.stderr, "");
@@ -422,4 +426,41 @@ test("a failed restore does not change the process exit code", () => {
   const output = titleLifecycle({ failRestore: true, exitCode: 7 });
   assert.ok(output.startsWith(PUSH_TITLE + NATIVE_TITLE));
   assert.ok(output.endsWith("<before-exit>"));
+});
+
+test("Windows Terminal resets its retained starting title instead of using the unsupported stack", () => {
+  const output = titleLifecycle({ windowsTerminal: true });
+  assert.equal(output, NATIVE_TITLE + "\x1b]0;late shutdown title\x07<before-exit>" + RESET_WINDOWS_TITLE);
+  assert.ok(!output.includes(PUSH_TITLE));
+  assert.ok(!output.includes(POP_TITLE));
+});
+
+test("Windows Terminal resets once after reloads/session replacement, even without shutdown", () => {
+  const output = titleLifecycle({
+    windowsTerminal: true, replacements: ["reload", "new", "resume", "fork", "reload"],
+    repeatStartup: true, skipShutdown: true, exitCode: 7,
+  });
+  assert.equal(output, NATIVE_TITLE.repeat(6) + "<before-exit>" + RESET_WINDOWS_TITLE);
+});
+
+for (const options of [
+  { mode: "rpc" }, { mode: "json" }, { mode: "print" },
+  { stdinTTY: false }, { stdoutTTY: false }, { startReason: "reload" },
+]) {
+  test(`Windows Terminal does not reset outside initial TUI startup: ${JSON.stringify(options)}`, () => {
+    const output = titleLifecycle({ ...options, windowsTerminal: true, expectedListeners: 0 });
+    assert.ok(!output.includes(RESET_WINDOWS_TITLE));
+    assert.ok(!output.includes(PUSH_TITLE));
+    assert.ok(!output.includes(POP_TITLE));
+  });
+}
+
+test("Windows Terminal does not reset with TERM=dumb", () => {
+  const output = titleLifecycle({ windowsTerminal: true, expectedListeners: 0 }, "dumb");
+  assert.ok(!output.includes(RESET_WINDOWS_TITLE));
+});
+
+test("a failed Windows Terminal reset does not change the process exit code", () => {
+  const output = titleLifecycle({ windowsTerminal: true, failRestore: true, exitCode: 7 });
+  assert.equal(output, NATIVE_TITLE + "\x1b]0;late shutdown title\x07<before-exit>");
 });
